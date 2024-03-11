@@ -57,7 +57,7 @@ Then, execute the script:
 This script installs additional required packages, creates the uPow database and user, sets permissions, and imports the initial database schema.
 
 ```bash
-git clone https://github.com/upow-coin/upow
+git clone https://github.com/upowai/upow
 cd upow
 pip3 install -r requirements.txt
 uvicorn upow.node.main:app --port 3006
