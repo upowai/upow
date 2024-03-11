@@ -1,0 +1,13 @@
+/main.py
+venv
+.vscode
+.idea
+__pycache__
+bot.py
+miner.html
+bot.session
+test.db
+postgres/
+/myenv
+/upow_wallet/key_pair_list.json
+/upow_wallet/upow_wallet.json

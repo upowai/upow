@@ -1,0 +1,20 @@
+all: install_postgres start_enable_postgres
+
+import_gpg_key:
+	@wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql-archive-keyring.gpg
+
+
+add_repo: import_gpg_key
+	@echo "deb [signed-by=/usr/share/keyrings/postgresql-archive-keyring.gpg] http://apt.postgresql.org/pub/repos/apt/ $(shell lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+
+
+install_postgres: add_repo
+	@sudo apt-get update
+	@sudo apt-get -y install postgresql-14
+
+
+start_enable_postgres:
+	@sudo systemctl start postgresql
+	@sudo systemctl enable postgresql
+
+.PHONY: import_gpg_key add_repo install_postgres start_enable_postgres
