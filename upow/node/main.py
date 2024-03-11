@@ -211,9 +211,9 @@ async def startup():
     global db
     db = await Database.create(
         user=environ.get("UPOW_DATABASE_USER", "upow"),
-        password=environ.get("UPOW_DATABASE_PASSWORD", ""),
+        password=environ.get("UPOW_DATABASE_PASSWORD", "12345"),
         database=environ.get("UPOW_DATABASE_NAME", "upow"),
-        host=environ.get("UPOW_DATABASE_HOST", "127.0.0.1"),
+        host=environ.get("UPOW_DATABASE_HOST", None),
     )
 
 
