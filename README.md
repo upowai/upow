@@ -59,7 +59,7 @@ This script installs additional required packages, creates the uPow database and
 ```bash
 git clone https://github.com/upowai/upow
 cd upow
-pip3 install -r requirements.txt
+pip install -r requirements.txt
 uvicorn upow.node.main:app --port 3006
 ```
 
