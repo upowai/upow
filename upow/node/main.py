@@ -578,22 +578,22 @@ async def get_address_info(
                 }
                 for output in outputs
             ],
-            "transactions": [
-                await db.get_nice_transaction(tx.hash(), address if verify else None)
-                for tx in transactions
-            ],
-            # "transactions": (
-            #     [
-            #         await db.get_nice_transaction(
-            #             tx.hash(), address if verify else None
-            #         )
-            #         for tx in await db.get_address_transactions(
-            #             address, limit=transactions_count_limit, check_signatures=True
-            #         )
-            #     ]
-            #     if transactions_count_limit > 0
-            #     else []
-            # ),
+            # "transactions": [
+            #     await db.get_nice_transaction(tx.hash(), address if verify else None)
+            #     for tx in transactions
+            # ],
+            "transactions": (
+                [
+                    await db.get_nice_transaction(
+                        tx.hash(), address if verify else None
+                    )
+                    for tx in await db.get_address_transactions(
+                        address, limit=transactions_count_limit, check_signatures=True
+                    )
+                ]
+                if transactions_count_limit > 0
+                else []
+            ),
             "pending_transactions": (
                 [
                     await db.get_nice_transaction(
