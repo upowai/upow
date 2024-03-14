@@ -540,6 +540,7 @@ async def get_address_info(
     request: Request,
     address: str,
     transactions_count_limit: int = Query(default=5, le=50),
+    page: int = Query(default=1, ge=1),
     show_pending: bool = False,
     verify: bool = False,
     stake_outputs: bool = False,
@@ -552,6 +553,18 @@ async def get_address_info(
     outputs = await db.get_spendable_outputs(address)
     stake = await db.get_address_stake(address)
     balance = sum(output.amount for output in outputs)
+
+    offset = (page - 1) * transactions_count_limit
+    transactions = (
+        await db.get_address_transactions(
+            address,
+            limit=transactions_count_limit,
+            offset=offset,
+            check_signatures=True,
+        )
+        if transactions_count_limit > 0
+        else []
+    )
     return {
         "ok": True,
         "result": {
@@ -565,18 +578,22 @@ async def get_address_info(
                 }
                 for output in outputs
             ],
-            "transactions": (
-                [
-                    await db.get_nice_transaction(
-                        tx.hash(), address if verify else None
-                    )
-                    for tx in await db.get_address_transactions(
-                        address, limit=transactions_count_limit, check_signatures=True
-                    )
-                ]
-                if transactions_count_limit > 0
-                else []
-            ),
+            "transactions": [
+                await db.get_nice_transaction(tx.hash(), address if verify else None)
+                for tx in transactions
+            ],
+            # "transactions": (
+            #     [
+            #         await db.get_nice_transaction(
+            #             tx.hash(), address if verify else None
+            #         )
+            #         for tx in await db.get_address_transactions(
+            #             address, limit=transactions_count_limit, check_signatures=True
+            #         )
+            #     ]
+            #     if transactions_count_limit > 0
+            #     else []
+            # ),
             "pending_transactions": (
                 [
                     await db.get_nice_transaction(
