@@ -554,17 +554,17 @@ async def get_address_info(
     stake = await db.get_address_stake(address)
     balance = sum(output.amount for output in outputs)
 
-    offset = (page - 1) * transactions_count_limit
-    transactions = (
-        await db.get_address_transactions(
-            address,
-            limit=transactions_count_limit,
-            offset=offset,
-            check_signatures=True,
-        )
-        if transactions_count_limit > 0
-        else []
-    )
+    # offset = (page - 1) * transactions_count_limit
+    # transactions = (
+    #     await db.get_address_transactions(
+    #         address,
+    #         limit=transactions_count_limit,
+    #         offset=offset,
+    #         check_signatures=True,
+    #     )
+    #     if transactions_count_limit > 0
+    #     else []
+    # )
     return {
         "ok": True,
         "result": {
