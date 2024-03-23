@@ -10,128 +10,141 @@ from upow.constants import ENDIAN
 from upow.helpers import string_to_bytes, timestamp
 
 
-def get_transactions_merkle_tree(transactions):
+def calculate_merkle_root(transactions):
     return hashlib.sha256(
-        b"".join(bytes.fromhex(transaction) for transaction in transactions)
+        b"".join(bytes.fromhex(tx) for tx in transactions)
     ).hexdigest()
 
 
-NODE = sys.argv[3].strip("/") + "/" if len(sys.argv) >= 4 else "http://localhost:3006/"
+MINING_NODE_URL = (
+    sys.argv[3].strip("/") + "/" if len(sys.argv) >= 4 else "http://localhost:3006/"
+)
 
 
-def run(start: int = 0, step: int = 1, res: dict = None):
-    address = sys.argv[1]
-    difficulty = res["difficulty"]
-    decimal = difficulty % 1
-    last_block = res["last_block"]
-    last_block["hash"] = (
-        last_block["hash"]
-        if "hash" in last_block
+def mine_block(
+    start_nonce: int = 0, nonce_increment: int = 1, mining_params: dict = None
+):
+    miner_wallet = sys.argv[1]
+    mining_difficulty = mining_params["difficulty"]
+    fractional_difficulty = mining_difficulty % 1
+    previous_block = mining_params["last_block"]
+    previous_block["hash"] = (
+        previous_block["hash"]
+        if "hash" in previous_block
         else (18_884_643).to_bytes(32, ENDIAN).hex()
     )
-    last_block["id"] = last_block["id"] if "id" in last_block else 0
-    chunk = last_block["hash"][-int(difficulty) :]
+    previous_block["id"] = previous_block["id"] if "id" in previous_block else 0
+    target_prefix = previous_block["hash"][-int(mining_difficulty) :]
 
-    charset = "0123456789abcdef"
-    if decimal > 0:
-        count = ceil(16 * (1 - decimal))
-        charset = charset[:count]
-        idifficulty = int(difficulty)
+    allowed_chars = "0123456789abcdef"
+    if fractional_difficulty > 0:
+        char_limit = ceil(16 * (1 - fractional_difficulty))
+        allowed_chars = allowed_chars[:char_limit]
+        int_difficulty = int(mining_difficulty)
 
-        def check_block_is_valid(block_content: bytes) -> bool:
-            block_hash = hashlib.sha256(block_content).hexdigest()
-            return block_hash.startswith(chunk) and block_hash[idifficulty] in charset
+        def is_valid_block(block_data: bytes) -> bool:
+            block_digest = hashlib.sha256(block_data).hexdigest()
+            return (
+                block_digest.startswith(target_prefix)
+                and block_digest[int_difficulty] in allowed_chars
+            )
 
     else:
 
-        def check_block_is_valid(block_content: bytes) -> bool:
-            return hashlib.sha256(block_content).hexdigest().startswith(chunk)
+        def is_valid_block(block_data: bytes) -> bool:
+            return hashlib.sha256(block_data).hexdigest().startswith(target_prefix)
 
-    address_bytes = string_to_bytes(address)
-    t = time.time()
-    i = start
-    a = timestamp()
-    txs = res["pending_transactions_hashes"]
-    merkle_tree = get_transactions_merkle_tree(txs)
-    assert all(len(tx) == 64 for tx in txs)
-    if start == 0:
-        print(f"difficulty: {difficulty}")
-        print(f'block number: {last_block["id"]}')
-        print(f"Confirming {len(txs)} transactions")
-    prefix = (
-        bytes.fromhex(last_block["hash"])
-        + address_bytes
-        + bytes.fromhex(merkle_tree)
-        + a.to_bytes(4, byteorder=ENDIAN)
-        + int(difficulty * 10).to_bytes(2, ENDIAN)
+    wallet_bytes = string_to_bytes(miner_wallet)
+    start_time = time.time()
+    nonce = start_nonce
+    current_timestamp = timestamp()
+    pending_tx_hashes = mining_params["pending_transactions_hashes"]
+    merkle_root = calculate_merkle_root(pending_tx_hashes)
+    assert all(len(tx) == 64 for tx in pending_tx_hashes)
+    if start_nonce == 0:
+        print(f"difficulty: {mining_difficulty}")
+        print(f'block number: {previous_block["id"]}')
+        print(f"Confirming {len(pending_tx_hashes)} transactions")
+    block_prefix = (
+        bytes.fromhex(previous_block["hash"])
+        + wallet_bytes
+        + bytes.fromhex(merkle_root)
+        + current_timestamp.to_bytes(4, byteorder=ENDIAN)
+        + int(mining_difficulty * 10).to_bytes(2, ENDIAN)
     )
-    if len(address_bytes) == 33:
-        prefix = (2).to_bytes(1, ENDIAN) + prefix
+    if len(wallet_bytes) == 33:
+        block_prefix = (2).to_bytes(1, ENDIAN) + block_prefix
     while True:
-        found = True
-        check = 5000000 * step
-        while not check_block_is_valid(_hex := prefix + i.to_bytes(4, ENDIAN)):
-            if ((i := i + step) - start) % check == 0:
-                elapsed_time = time.time() - t
+        search_complete = True
+        check_interval = 5000000 * nonce_increment
+        while not is_valid_block(
+            block_candidate := block_prefix + nonce.to_bytes(4, ENDIAN)
+        ):
+            if ((nonce := nonce + nonce_increment) - start_nonce) % check_interval == 0:
+                elapsed = time.time() - start_time
                 print(
-                    f"Worker {start + 1}: "
-                    + str(int(i / step / elapsed_time / 1000))
+                    f"Worker {start_nonce + 1}: "
+                    + str(int(nonce / nonce_increment / elapsed / 1000))
                     + "k hash/s"
                 )
-                if elapsed_time > 90:
-                    found = False
+                if elapsed > 90:
+                    search_complete = False
                     break
-        if found:
-            print(_hex.hex())
-            print(",".join(txs))
-            r = requests.post(
-                NODE + "push_block",
+        if search_complete:
+            print(block_candidate.hex())
+            print(",".join(pending_tx_hashes))
+            response = requests.post(
+                MINING_NODE_URL + "push_block",
                 json={
-                    "block_content": _hex.hex(),
-                    "txs": txs,
-                    "id": last_block["id"] + 1,
+                    "block_content": block_candidate.hex(),
+                    "txs": pending_tx_hashes,
+                    "id": previous_block["id"] + 1,
                 },
-                timeout=20 + int((len(txs) or 1) / 3),
+                timeout=20 + int((len(pending_tx_hashes) or 1) / 3),
             )
-            print(res := r.json())
-            if res["ok"]:
+            print(result := response.json())
+            if result["ok"]:
                 print("BLOCK MINED\n\n")
             exit()
 
 
-def worker(start: int, step: int, res: dict):
+def mining_worker(start_nonce: int, nonce_increment: int, mining_params: dict):
     while True:
         try:
-            run(start, step, res)
+            mine_block(start_nonce, nonce_increment, mining_params)
         except Exception:
             raise
             time.sleep(3)
 
 
 if __name__ == "__main__":
-    workers = int(sys.argv[2]) if len(sys.argv) >= 3 else 1
+    num_workers = int(sys.argv[2]) if len(sys.argv) >= 3 else 1
     while True:
-        print(f"Starting {workers} workers")
-        res = None
-        while res is None:
+        print(f"Starting {num_workers} workers")
+        mining_info = None
+        while mining_info is None:
             try:
-                r = requests.get(NODE + "get_mining_info", timeout=5)
-                res = r.json()["result"]
+                response = requests.get(MINING_NODE_URL + "get_mining_info", timeout=5)
+                mining_info = response.json()["result"]
             except Exception as e:
                 print(e)
                 time.sleep(1)
                 pass
-        processes = []
-        for i in range(1, workers + 1):
+        worker_processes = []
+        for i in range(1, num_workers + 1):
             print(f"Starting worker n.{i}")
-            p = Process(target=worker, daemon=True, args=(i - 1, workers, res))
-            p.start()
-            processes.append(p)
-        elapsed_seconds = 0
-        while all(p.is_alive() for p in processes):
+            process = Process(
+                target=mining_worker,
+                daemon=True,
+                args=(i - 1, num_workers, mining_info),
+            )
+            process.start()
+            worker_processes.append(process)
+        time_passed = 0
+        while all(p.is_alive() for p in worker_processes):
             time.sleep(1)
-            elapsed_seconds += 1
-            if elapsed_seconds > 100:
+            time_passed += 1
+            if time_passed > 100:
                 break
-        for p in processes:
-            p.kill()
+        for p in worker_processes:
+            p.terminate()
