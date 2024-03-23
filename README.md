@@ -1,11 +1,11 @@
 # uPow
 
-**What is uPow ?**
-uPow, which stands for Useful Power of Work, is a Layer1 implementation that's been launched in a fair manner, closely following the original Nakamoto consensus. It's a protocol crafted for decentralized inodes. These inodes exist to create decentralized Useful work. Each inode symbolizes a market driven by incentives, competing to deliver the best decentralized Usefulwork.
+    **What is uPow ?**
+    uPow, which stands for Useful Power of Work, is a Layer1 implementation that's been launched in a fair manner, closely following the original Nakamoto consensus. It's a protocol crafted for decentralized inodes. These inodes exist to create decentralized Useful work. Each inode symbolizes a market driven by incentives, competing to deliver the best decentralized Usefulwork.
 
-uPow adopts a distinctive approach to the conventional blockchain. Rather than utilizing computational power for solving arbitrary puzzles, we channel this power into accomplishing useful tasks. We've developed a consensus mechanism that draws inspiration from PoW (Proof of Work), DPoS (Delegated Proof of Stake), and PoA (Proof of Authority).
+    uPow adopts a distinctive approach to the conventional blockchain. Rather than utilizing computational power for solving arbitrary puzzles, we channel this power into accomplishing useful tasks. We've developed a consensus mechanism that draws inspiration from PoW (Proof of Work), DPoS (Delegated Proof of Stake), and PoA (Proof of Authority).
 
-Inode miners receive their rewards in the form of uPow coins. You have the option to set up your own Inode, tailoring its incentive mechanism, to kick off your own inode, or you can become part of an existing Inode within the uPow ecosystem. Take, for instance, Inode1, an image detection Inode. It offers incentives to miners who contribute computational power for the creation of models.
+    Inode miners receive their rewards in the form of uPow coins. You have the option to set up your own Inode, tailoring its incentive mechanism, to kick off your own inode, or you can become part of an existing Inode within the uPow ecosystem. Take, for instance, Inode1, an image detection Inode. It offers incentives to miners who contribute computational power for the creation of models.
 
 ## Key Specifications
 
