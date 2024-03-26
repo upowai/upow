@@ -311,7 +311,7 @@ async def create_inode_de_registration_transaction(private_key):
 
 async def create_validator_registration_transaction(private_key):
     database: Database = await Database.get()
-    amount = Decimal(1)
+    amount = Decimal(100)
     inputs = []
     address = point_to_string(keys.get_public_key(private_key, CURVE))
     inputs.extend(await database.get_spendable_outputs(address, check_pending_txs=True))

@@ -191,6 +191,28 @@ def get_inode_rewards(reward, inode_address_details):
     return miner_reward, distributed_rewards
 
 
+def get_circulating_supply(block_no):
+    halving_interval = 3 * 365 * 24 * 60  # 3 years in minutes
+    initial_coins_per_block = 6
+
+    if block_no > halving_interval * 9:
+        return Decimal(MAX_SUPPLY)
+
+    # Calculate the circulating supply based on the block number
+    circulating_supply = 0
+    num_halvings = block_no // halving_interval
+    remaining_blocks = block_no % halving_interval
+    if remaining_blocks == 0:
+        num_halvings = num_halvings - 1
+    for i in range(num_halvings + 1):
+        current_reward = initial_coins_per_block / (2 ** i)
+        if i == num_halvings and remaining_blocks > 0:
+            circulating_supply += current_reward * remaining_blocks
+        else:
+            circulating_supply += current_reward * halving_interval
+    return circulating_supply
+
+
 def __check():
     i = 1
     r = 0

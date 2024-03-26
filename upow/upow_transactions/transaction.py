@@ -299,7 +299,7 @@ class Transaction:
                 print(f"This address is registered as inode. Cannot vote.")
                 return False
 
-            is_delegate = await Database.instance.get_stake_outputs(address, check_pending_txs=True)
+            is_delegate = await Database.instance.get_stake_outputs(address)
             if not is_delegate:
                 print(f"This address is not staked anything. Cannot vote.")
                 return False
@@ -326,7 +326,7 @@ class Transaction:
                 print('Inode registration amount is in correct')
                 return False
 
-            stake_inputs = await Database.instance.get_stake_outputs(address, check_pending_txs=True)
+            stake_inputs = await Database.instance.get_stake_outputs(address)
             if not stake_inputs:
                 print(f"You are not a delegate. Become a delegate by staking.")
                 return False
@@ -357,7 +357,8 @@ class Transaction:
         if self.transaction_type == TransactionType.VALIDATOR_REGISTRATION:
             from upow.database import Database
             address = await self.inputs[0].get_address()
-            if not await Database.instance.get_stake_outputs(address, check_pending_txs=True):
+            is_delegate = await Database.instance.get_stake_outputs(address)
+            if not is_delegate:
                 print("You are not a delegate. Become a delegate by staking.")
                 return False
 
@@ -371,7 +372,7 @@ class Transaction:
 
             validator_reg_amount = sum(tx_output.amount for tx_output in self.outputs if
                                       tx_output.transaction_type == OutputType.VALIDATOR_REGISTRATION)
-            if validator_reg_amount != 1:
+            if validator_reg_amount != 100:
                 print('validator reg amount is not correct')
                 return False
 
@@ -394,7 +395,7 @@ class Transaction:
             if not is_validator_registered:
                 print("This address is not registered as validator.")
                 return False
-            is_delegate = await Database.instance.get_stake_outputs(address, check_pending_txs=True)
+            is_delegate = await Database.instance.get_stake_outputs(address)
             if not is_delegate:
                 print('This address is not registered as delegate. Cannot revoke')
                 return False
@@ -410,7 +411,7 @@ class Transaction:
         if self.transaction_type == TransactionType.REVOKE_AS_DELEGATE:
             from upow.database import Database
             address = await self.inputs[0].get_voter_address()
-            is_delegate = await Database.instance.get_stake_outputs(address, check_pending_txs=True)
+            is_delegate = await Database.instance.get_stake_outputs(address)
             if not is_delegate:
                 print('This address is not registered as delegate. Cannot revoke')
                 return False

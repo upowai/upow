@@ -742,7 +742,7 @@ class Database:
         return list(outputs)
 
     async def get_address_transactions(self, address: str, check_pending_txs: bool = False,
-                                       check_signatures: bool = False, limit: int = 50) -> List[
+                                       check_signatures: bool = False, limit: int = 50, offset: int = 0) -> List[
         Union[Transaction, CoinbaseTransaction]]:
         point = string_to_point(address)
         search = ['%' + point_to_bytes(string_to_point(address), address_format).hex() + '%' for address_format in
@@ -750,8 +750,10 @@ class Database:
         addresses = [point_to_string(point, address_format) for address_format in list(AddressFormat)]
         async with self.pool.acquire() as connection:
             txs = await connection.fetch(
-                'SELECT tx_hex, blocks.id AS block_no FROM transactions INNER JOIN blocks ON (transactions.block_hash = blocks.hash) WHERE $1 && inputs_addresses OR $1 && outputs_addresses ORDER BY block_no DESC LIMIT $2',
-                addresses, limit)
+                'SELECT tx_hex, blocks.id AS block_no FROM transactions INNER JOIN blocks ON (transactions.block_hash '
+                '= blocks.hash) WHERE $1 && inputs_addresses OR $1 && outputs_addresses ORDER BY block_no DESC LIMIT '
+                '$2 OFFSET $3',
+                addresses, limit, offset)
             if check_pending_txs:
                 txs = await connection.fetch(
                     "SELECT tx_hex FROM pending_transactions WHERE tx_hex LIKE ANY($1) OR $2 && inputs_addresses",
@@ -1273,6 +1275,32 @@ class Database:
                     addresses, timeout=60)
         return [TransactionInput(tx_hash, index, amount=Decimal(amount) / SMALLEST, public_key=point) for
                 tx_hash, index, amount in validators_voting_power]
+
+    async def get_validators_spent_votes(self, address: str, check_pending_txs: bool = False) -> List[
+        TransactionInput]:
+        point = string_to_point(address)
+        search = ['%' + point_to_bytes(string_to_point(address), address_format).hex() + '%' for address_format in
+                  list(AddressFormat)]
+        addresses = [point_to_string(point, address_format) for address_format in list(AddressFormat)]
+        addresses.reverse()
+        search.reverse()
+        async with self.pool.acquire() as connection:
+            if not check_pending_txs:
+                validators_spent_votes = await connection.fetch(
+                    '''SELECT inodes_ballot.tx_hash, index, transactions.outputs_amounts[index + 1]
+                    AS amount FROM transactions INNER JOIN inodes_ballot ON (transactions.tx_hash = 
+                    inodes_ballot.tx_hash) WHERE transactions.inputs_addresses[index+1] = ANY($1)''',
+                    addresses)
+            else:
+                validators_spent_votes = await connection.fetch(
+                    '''SELECT inodes_ballot.tx_hash, index, transactions.outputs_amounts[index + 1]
+                    AS amount FROM transactions INNER JOIN inodes_ballot ON (transactions.tx_hash = 
+                    inodes_ballot.tx_hash) WHERE transactions.inputs_addresses[index+1] = ANY($1) AND CONCAT(
+                    inodes_ballot.tx_hash, inodes_ballot.index) != ALL (SELECT CONCAT( 
+                    pending_spent_outputs.tx_hash, pending_spent_outputs.index) FROM pending_spent_outputs)''',
+                    addresses, timeout=60)
+        return [TransactionInput(tx_hash, index, amount=Decimal(amount) / SMALLEST, public_key=point) for
+                tx_hash, index, amount in validators_spent_votes]
 
     async def get_delegates_voting_power(self, address: str, check_pending_txs: bool = False) -> List[
         TransactionInput]:

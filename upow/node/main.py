@@ -30,12 +30,12 @@ from upow.manager import (
     calculate_difficulty,
     clear_pending_transactions,
     block_to_bytes,
-    get_transactions_merkle_tree_ordered,
+    get_transactions_merkle_tree_ordered, get_circulating_supply,
 )
 from upow.node.nodes_manager import NodesManager, NodeInterface
 from upow.node.utils import ip_is_local
 from upow.upow_transactions import Transaction, CoinbaseTransaction
-from upow.constants import VERSION, ENDIAN
+from upow.constants import VERSION, ENDIAN, MAX_SUPPLY
 
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
@@ -535,7 +535,7 @@ async def get_delegates_info(
 
 
 @app.get("/get_address_info")
-@limiter.limit("2/second")
+@limiter.limit("10/second")
 async def get_address_info(
     request: Request,
     address: str,
@@ -549,22 +549,23 @@ async def get_address_info(
     address_state: bool = False,
     inode_registration_outputs: bool = False,
     validator_unspent_votes: bool = False,
+    validator_spent_votes: bool = False,
 ):
     outputs = await db.get_spendable_outputs(address)
     stake = await db.get_address_stake(address)
     balance = sum(output.amount for output in outputs)
 
-    # offset = (page - 1) * transactions_count_limit
-    # transactions = (
-    #     await db.get_address_transactions(
-    #         address,
-    #         limit=transactions_count_limit,
-    #         offset=offset,
-    #         check_signatures=True,
-    #     )
-    #     if transactions_count_limit > 0
-    #     else []
-    # )
+    offset = (page - 1) * transactions_count_limit
+    transactions = (
+        await db.get_address_transactions(
+            address,
+            limit=transactions_count_limit,
+            offset=offset,
+            check_signatures=True,
+        )
+        if transactions_count_limit > 0
+        else []
+    )
     return {
         "ok": True,
         "result": {
@@ -578,22 +579,10 @@ async def get_address_info(
                 }
                 for output in outputs
             ],
-            # "transactions": [
-            #     await db.get_nice_transaction(tx.hash(), address if verify else None)
-            #     for tx in transactions
-            # ],
-            "transactions": (
-                [
-                    await db.get_nice_transaction(
-                        tx.hash(), address if verify else None
-                    )
-                    for tx in await db.get_address_transactions(
-                        address, limit=transactions_count_limit, check_signatures=True
-                    )
-                ]
-                if transactions_count_limit > 0
-                else []
-            ),
+            "transactions": [
+                await db.get_nice_transaction(tx.hash(), address if verify else None)
+                for tx in transactions
+            ],
             "pending_transactions": (
                 [
                     await db.get_nice_transaction(
@@ -667,6 +656,18 @@ async def get_address_info(
                     for output in await db.get_validators_voting_power(address)
                 ]
                 if validator_unspent_votes
+                else None
+            ),
+            "validator_spent_votes": (
+                [
+                    {
+                        "amount": "{:f}".format(output.amount),
+                        "tx_hash": output.tx_hash,
+                        "index": output.index,
+                    }
+                    for output in await db.get_validators_spent_votes(address)
+                ]
+                if validator_spent_votes
                 else None
             ),
             "is_inode": (
@@ -815,3 +816,13 @@ async def dobby_info(request: Request):
     for item in inode_with_vote:
         item["emission"] = str(item["emission"]) + "%"
     return {"ok": True, "result": inode_with_vote}
+
+
+@app.get("/get_supply_info")
+@limiter.limit("10/minute")
+async def get_supply_info(request: Request):
+    last_block_id = await db.get_next_block_id()
+    last_block_id = last_block_id - 1 if last_block_id > 0 else last_block_id
+    circulating_supply = get_circulating_supply(last_block_id)
+    supply_info = {"max_supply": MAX_SUPPLY, "circulating_supply": circulating_supply}
+    return {"ok": True, "result": supply_info}

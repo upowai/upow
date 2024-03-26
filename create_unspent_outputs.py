@@ -3,7 +3,7 @@ from os import environ
 
 from asyncpg import UndefinedTableError
 
-from upow import Database
+from upow.database import Database
 
 
 async def run():
