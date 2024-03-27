@@ -126,7 +126,7 @@ class Transaction:
         spent_outputs = await Database.instance.get_pending_spent_outputs(check_inputs)
         is_true = spent_outputs == []
         if not is_true:
-            logging.error('Double spending in pending')
+            logging.error(f'Double spending in pending {spent_outputs}')
         return is_true
 
     async def _fill_transaction_inputs(self, txs=None) -> None:
