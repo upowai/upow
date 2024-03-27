@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -86,6 +87,7 @@ class Database:
 
     async def add_pending_transaction(self, transaction: Transaction, verify: bool = True):
         if isinstance(transaction, CoinbaseTransaction):
+            logging.error('CoinbaseTransaction in add_pending_transaction')
             return False
         tx_hex = transaction.hex()
         if verify and not await transaction.verify_pending():

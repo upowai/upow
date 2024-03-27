@@ -129,27 +129,16 @@ async def check_block_is_valid(block_content: str, mining_info: tuple = None) ->
     return block_hash.startswith(last_block_hash[-difficulty:])
 
 
-# def get_block_reward(number: int) -> Decimal:
-#     divider = floor(number / 150000)
-#     if divider == 0:
-#         return Decimal(100)
-#     if divider > 8:
-#         if number < 150000 * 9 + 458732 - 150000:
-#             return Decimal("0.390625")
-#         elif number < 150000 * 9 + 458733 - 150000 + 320:
-#             return Decimal("0.3125")
-#         return Decimal(0)
-#     return Decimal(100) / (2 ** Decimal(divider))
-
 def get_block_reward(block_no):
-    assert block_no >= 0
-    if block_no > 1576800 * 9:
+    assert block_no > 0
+    halving_interval = 3 * 365 * 24 * 60  # 3 years in minutes
+    if block_no > halving_interval * 9:
         return Decimal(0)
     coins_per_block = 6
-    halving_interval = 3 * 365 * 24 * 60  # 3 years in minutes
-
     # Calculate the number of halvings that have occurred
     num_halvings = block_no // halving_interval
+    if block_no % halving_interval == 0:
+        num_halvings = num_halvings - 1
     current_reward = coins_per_block / (2 ** num_halvings)
 
     return Decimal(current_reward)

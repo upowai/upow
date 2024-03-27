@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal
 from io import BytesIO
 from typing import List
@@ -123,7 +124,10 @@ class Transaction:
         from upow.database import Database
         check_inputs = [(tx_input.tx_hash, tx_input.index) for tx_input in self.inputs]
         spent_outputs = await Database.instance.get_pending_spent_outputs(check_inputs)
-        return spent_outputs == []
+        is_true = spent_outputs == []
+        if not is_true:
+            logging.error('Double spending in pending')
+        return is_true
 
     async def _fill_transaction_inputs(self, txs=None) -> None:
         from upow.database import Database
@@ -372,7 +376,7 @@ class Transaction:
 
             validator_reg_amount = sum(tx_output.amount for tx_output in self.outputs if
                                       tx_output.transaction_type == OutputType.VALIDATOR_REGISTRATION)
-            if validator_reg_amount != 100:
+            if validator_reg_amount != 100 and validator_reg_amount != 1:
                 print('validator reg amount is not correct')
                 return False
 
@@ -429,13 +433,13 @@ class Transaction:
             address = await self.inputs[0].get_address()
             stake_inputs = await Database.instance.get_stake_outputs(address, check_pending_txs=True)
             if stake_inputs:
-                print('Already staked')
+                logging.error('Already staked')
                 return False
 
             pending_stake_tx = await Database.instance.get_pending_stake_transaction(address)
             pending_stake_tx = [tx for tx in pending_stake_tx if tx.tx_hash != self.tx_hash]
             if pending_stake_tx:
-                print('Already staked. Transaction is in pending')
+                logging.error('Already staked. Transaction is in pending')
                 return False
 
             tx_delegate_power = sum(tx_output.amount
@@ -443,15 +447,15 @@ class Transaction:
                                     if tx_output.transaction_type == OutputType.DELEGATE_VOTING_POWER)
             if tx_delegate_power > 0:
                 if tx_delegate_power != 10:
-                    print('Delegate voting power bug')
+                    logging.error('Delegate voting power bug')
                     return False
 
                 if await Database.instance.get_delegates_all_power(address, check_pending_txs=True):
-                    print('Delegate already have voting power')
+                    logging.error('Delegate already have voting power')
                     return False
             else:
                 if not await Database.instance.get_delegates_all_power(address, check_pending_txs=True):
-                    print('Delegate doesnt have voting power')
+                    logging.error('Delegate doesnt have voting power')
                     return False
 
         return True
