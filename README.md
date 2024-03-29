@@ -93,4 +93,8 @@ Subsequent blocks won't have a block reward.
 Reward will be added the fees of the transactions included in the block.  
 A transaction may also have no fees at all.
 
-## Ngnix
+### Running a Block Miner
+
+```bash
+python miner.py <wallet_address>
+```
