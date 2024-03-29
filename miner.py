@@ -17,7 +17,7 @@ def calculate_merkle_root(transactions):
 
 
 MINING_NODE_URL = (
-    sys.argv[3].strip("/") + "/" if len(sys.argv) >= 4 else "http://localhost:3006/"
+    sys.argv[3].strip("/") + "/" if len(sys.argv) >= 4 else "https://api.upow.ai/"
 )
 
 

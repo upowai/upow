@@ -247,7 +247,7 @@ async def push_tx(tx, upow_database):
 
 
 async def push_tx_request(tx):
-    r = requests.get("http://localhost:3006/push_tx", {"tx_hex": tx.hex()}, timeout=10)
+    r = requests.get("https://api.upow.ai/push_tx", {"tx_hex": tx.hex()}, timeout=10)
     res = r.json()
     if res["ok"]:
         print(f"Transaction pushed. Transaction hash: {sha256(tx.hex())}")
