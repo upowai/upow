@@ -57,7 +57,7 @@ Then, execute the script:
 This script installs additional required packages, creates the uPow database and user, sets permissions, and imports the initial database schema.
 
 ```bash
-git clone https://github.com/upowai/upow
+git clone https://github.com/upowai/upow.git
 cd upow
 pip install -r requirements.txt
 uvicorn upow.node.main:app --port 3006
@@ -92,3 +92,5 @@ The last block with a reward will be the `458733`th, with a reward of `0.3125`.
 Subsequent blocks won't have a block reward.  
 Reward will be added the fees of the transactions included in the block.  
 A transaction may also have no fees at all.
+
+## Ngnix
