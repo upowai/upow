@@ -11,4 +11,4 @@ postgres/
 /myenv
 upow/upow_wallet/key_pair_list.json
 upow/upow_wallet/upow_wallet.json
-/node/nodes.json
+upow/node/nodes.json
