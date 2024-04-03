@@ -376,7 +376,7 @@ class Transaction:
 
             validator_reg_amount = sum(tx_output.amount for tx_output in self.outputs if
                                       tx_output.transaction_type == OutputType.VALIDATOR_REGISTRATION)
-            if validator_reg_amount != 100 and validator_reg_amount != 1:
+            if validator_reg_amount != 100:
                 print('validator reg amount is not correct')
                 return False
 
