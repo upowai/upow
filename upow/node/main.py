@@ -218,7 +218,6 @@ async def startup():
 
 
 @app.get("/")
-@limiter.limit("10/minute")
 async def root():
     return {
         "ok": True,
