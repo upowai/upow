@@ -18,6 +18,7 @@ CORE_URL = (
     else "http://localhost:3006/"
 )
 
+
 ACTIVE_NODES_DELTA = 60 * 60 * 24 * 7  # 7 days
 INACTIVE_NODES_DELTA = 60 * 60 * 24 * 90  # 3 months
 MAX_NODES_COUNT = 100
@@ -47,6 +48,7 @@ class NodesManager:
         core_url = CORE_URL.rstrip("/")
         NodesManager.db._loaddb()
         NodesManager.nodes = NodesManager.db.get("nodes") or [core_url]
+        print("Loaded nodes:", NodesManager.nodes)
         NodesManager.last_messages = NodesManager.db.get("last_messages") or {
             core_url: timestamp()
         }
