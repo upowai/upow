@@ -9,6 +9,8 @@ import requests
 from upow.constants import ENDIAN
 from upow.helpers import string_to_bytes, timestamp
 
+import config as config
+
 
 def calculate_merkle_root(transactions):
     return hashlib.sha256(
@@ -16,9 +18,13 @@ def calculate_merkle_root(transactions):
     ).hexdigest()
 
 
-MINING_NODE_URL = (
-    sys.argv[3].strip("/") + "/" if len(sys.argv) >= 4 else "https://api.upow.ai/"
+CORE_URL = (
+    getattr(config, "CORE_URL", "http://localhost:3006/")
+    if hasattr(config, "CORE_URL") and config.CORE_URL
+    else "http://localhost:3006/"
 )
+
+MINING_NODE_URL = sys.argv[3].strip("/") + "/" if len(sys.argv) >= 4 else CORE_URL
 
 
 def mine_block(

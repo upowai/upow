@@ -16,12 +16,21 @@ from upow.upow_transactions import Transaction, TransactionOutput, TransactionIn
 from upow.constants import CURVE
 from upow.helpers import point_to_string, sha256, string_to_point
 
-NODE_URL = "https://api.upow.ai"
+import config as config
+
+
+CORE_URL = (
+    getattr(config, "CORE_URL", "http://localhost:3006/")
+    if hasattr(config, "CORE_URL") and config.CORE_URL
+    else "http://localhost:3006/"
+)
+
+NODE_URL = CORE_URL
 
 
 def get_address_info(address: str):
     request = requests.get(
-        f"{NODE_URL}/get_address_info",
+        f"{NODE_URL}get_address_info",
         {"address": address, "transactions_count_limit": 0, "show_pending": True},
     )
     result = request.json()["result"]
@@ -113,7 +122,7 @@ def create_transaction(
 
     transaction.sign(private_keys)
 
-    requests.get(f"{NODE_URL}/push_tx", {"tx_hex": transaction.hex()}, timeout=10)
+    requests.get(f"{NODE_URL}push_tx", {"tx_hex": transaction.hex()}, timeout=10)
     return transaction
 
 

@@ -9,6 +9,15 @@ import pickledb
 from ..constants import MAX_BLOCK_SIZE_HEX
 from ..helpers import timestamp
 
+import config as config
+
+
+CORE_URL = (
+    getattr(config, "CORE_URL", "http://localhost:3006/")
+    if hasattr(config, "CORE_URL") and config.CORE_URL
+    else "http://localhost:3006/"
+)
+
 ACTIVE_NODES_DELTA = 60 * 60 * 24 * 7  # 7 days
 INACTIVE_NODES_DELTA = 60 * 60 * 24 * 90  # 3 months
 MAX_NODES_COUNT = 100
@@ -35,10 +44,11 @@ class NodesManager:
 
     @staticmethod
     def init():
+        core_url = CORE_URL.rstrip("/")
         NodesManager.db._loaddb()
-        NodesManager.nodes = NodesManager.db.get("nodes") or ["https://api.upow.ai"]
+        NodesManager.nodes = NodesManager.db.get("nodes") or [core_url]
         NodesManager.last_messages = NodesManager.db.get("last_messages") or {
-            "https://api.upow.ai": timestamp()
+            core_url: timestamp()
         }
 
     @staticmethod

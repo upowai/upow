@@ -6,7 +6,14 @@ import sys
 import pickledb
 import requests
 from fastecdsa import keys, curve
+import config as config
 
+
+CORE_URL = (
+    getattr(config, "CORE_URL", "http://localhost:3006/")
+    if hasattr(config, "CORE_URL") and config.CORE_URL
+    else "http://localhost:3006/"
+)
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, dir_path + "/../..")
@@ -247,7 +254,8 @@ async def push_tx(tx, upow_database):
 
 
 async def push_tx_request(tx):
-    r = requests.get("https://api.upow.ai/push_tx", {"tx_hex": tx.hex()}, timeout=10)
+    api_endpoint = f"{CORE_URL}push_tx"
+    r = requests.get(api_endpoint, {"tx_hex": tx.hex()}, timeout=10)
     res = r.json()
     if res["ok"]:
         print(f"Transaction pushed. Transaction hash: {sha256(tx.hex())}")
