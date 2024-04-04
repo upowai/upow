@@ -48,7 +48,7 @@ class NodesManager:
         core_url = CORE_URL.rstrip("/")
         NodesManager.db._loaddb()
         NodesManager.nodes = NodesManager.db.get("nodes") or [core_url]
-        print("Loaded nodes:", NodesManager.nodes)
+        # print("Loaded nodes:", NodesManager.nodes)
         NodesManager.last_messages = NodesManager.db.get("last_messages") or {
             core_url: timestamp()
         }
