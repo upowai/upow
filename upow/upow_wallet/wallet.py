@@ -6,14 +6,6 @@ import sys
 import pickledb
 import requests
 from fastecdsa import keys, curve
-import config as config
-
-
-CORE_URL = (
-    getattr(config, "CORE_URL", "http://localhost:3006/")
-    if hasattr(config, "CORE_URL") and config.CORE_URL
-    else "http://localhost:3006/"
-)
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, dir_path + "/../..")
@@ -34,6 +26,13 @@ from utils import (
 from upow.database import Database
 from upow.constants import CURVE
 from upow.helpers import point_to_string, sha256
+import config as config
+
+CORE_URL = (
+    getattr(config, "CORE_URL", "http://localhost:3006/")
+    if hasattr(config, "CORE_URL") and config.CORE_URL
+    else "http://localhost:3006/"
+)
 
 Database.credentials = {
     "user": os.environ.get("UPOW_DATABASE_USER", "upow"),
