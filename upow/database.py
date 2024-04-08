@@ -1050,6 +1050,21 @@ class Database:
             assert len(pending_stake_transaction) < 2
         return pending_stake_transaction
 
+    async def get_pending_vote_as_delegate_transaction(self, address: str):
+        search = ['%' + point_to_bytes(string_to_point(address), address_format).hex() + '%' for address_format in
+                  list(AddressFormat)]
+        pending_vote_as_delegate_transaction = []
+        async with self.pool.acquire() as connection:
+            txs = await connection.fetch('SELECT tx_hex FROM pending_transactions WHERE tx_hex LIKE ANY($1)',
+                                         search)
+
+            for tx in txs:
+                tx = await Transaction.from_hex(tx['tx_hex'], check_signatures=False)
+                if tx.transaction_type == TransactionType.VOTE_AS_DELEGATE \
+                        and await tx.inputs[0].get_address() == address:
+                    pending_vote_as_delegate_transaction.append(tx)
+        return pending_vote_as_delegate_transaction
+
     async def get_address_stake(self, address: str, check_pending_txs: bool = False) -> Decimal:
         point = string_to_point(address)
         search = ['%' + point_to_bytes(string_to_point(address), address_format).hex() + '%' for address_format in

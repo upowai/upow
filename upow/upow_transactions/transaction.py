@@ -467,6 +467,10 @@ class Transaction:
             if await Database.instance.get_delegates_spent_votes(address, check_pending_txs=True):
                 print('Kindly release the votes.')
                 return False
+            pending_vote_tx = await Database.instance.get_pending_vote_as_delegate_transaction(address=address)
+            if pending_vote_tx:
+                print('Kindly release the votes. Vote transaction is in pending')
+                return False
         return True
 
     async def verify_pending(self):

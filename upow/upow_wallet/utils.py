@@ -206,6 +206,10 @@ async def create_unstake_transaction(private_key):
     if await database.get_delegates_spent_votes(sender_address, check_pending_txs=True):
         raise Exception("Kindly release the votes.")
 
+    pending_vote_tx = await Database.instance.get_pending_vote_as_delegate_transaction(address=sender_address)
+    if pending_vote_tx:
+        raise Exception('Kindly release the votes. Vote transaction is in pending')
+
     transaction = Transaction(
         [stake_inputs[0]],
         [
