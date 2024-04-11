@@ -21,6 +21,7 @@ from slowapi.errors import RateLimitExceeded
 
 from upow.database import Database
 from upow.helpers import timestamp, sha256, transaction_to_json
+import upow.helpers
 from upow.manager import (
     create_block,
     get_difficulty,
@@ -441,8 +442,10 @@ async def sync(request: Request, node_url: str = None):
     if is_syncing:
         return {"ok": False, "error": "Node is already syncing"}
     is_syncing = True
+    upow.helpers.is_blockchain_syncing = True
     await sync_blockchain(node_url)
     is_syncing = False
+    upow.helpers.is_blockchain_syncing = False
 
 
 LAST_PENDING_TRANSACTIONS_CLEAN = [0]

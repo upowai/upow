@@ -6,6 +6,7 @@ from typing import List
 from fastecdsa import keys
 from icecream import ic
 
+import upow.helpers
 from . import TransactionInput, TransactionOutput
 from .coinbase_transaction import CoinbaseTransaction
 from ..constants import ENDIAN, SMALLEST, CURVE, MAX_INODES
@@ -431,8 +432,8 @@ class Transaction:
         if any(tx_output.transaction_type == OutputType.STAKE for tx_output in self.outputs):
             from upow.database import Database
             address = await self.inputs[0].get_address()
-            stake_inputs = await Database.instance.get_stake_outputs(address, check_pending_txs=True)
-            if stake_inputs:
+            stake_inputs = await Database.instance.get_stake_outputs(address)
+            if stake_inputs and not upow.helpers.is_blockchain_syncing:
                 logging.error('Already staked')
                 return False
 

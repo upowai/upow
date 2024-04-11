@@ -139,7 +139,7 @@ async def create_stake_transaction(private_key, amount, send_back_address=None):
         raise Exception(f"Error: You don't have enough funds")
 
     stake_inputs = await database.get_stake_outputs(
-        sender_address, check_pending_txs=True
+        sender_address
     )
     if stake_inputs:
         raise Exception("Already staked")
