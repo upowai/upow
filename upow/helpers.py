@@ -18,7 +18,7 @@ from .constants import ENDIAN, CURVE, SMALLEST
 _print = print
 
 logging.basicConfig(level=logging.INFO if '--nologs' not in sys.argv else logging.WARNING)
-
+is_blockchain_syncing = False
 
 def log(s):
     logging.getLogger('upow').info(s)

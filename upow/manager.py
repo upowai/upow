@@ -664,9 +664,9 @@ async def create_block(
         await database.remove_outputs(transactions)
         await database.remove_pending_spent_outputs(transactions)
 
-        _print(
-            f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees}"
-        )
+    _print(
+        f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees}"
+    )
     Manager.difficulty = None
     return True
 

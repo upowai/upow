@@ -465,7 +465,8 @@ class Transaction:
         if any(tx_output.transaction_type == OutputType.UN_STAKE for tx_output in self.outputs):
             from upow.database import Database
             address = await self.inputs[0].get_address()
-            if await Database.instance.get_delegates_spent_votes(address, check_pending_txs=True):
+            if await Database.instance.get_delegates_spent_votes(address) \
+                    and self.hash() not in ["8befeb253bc6eddd8501f5b27a02b195f5c06a51ccf788213cbedafe7cc49c53"]: # ignoring the revoke_as_delegate and unstake in same block
                 print('Kindly release the votes.')
                 return False
             pending_vote_tx = await Database.instance.get_pending_vote_as_delegate_transaction(address=address)
