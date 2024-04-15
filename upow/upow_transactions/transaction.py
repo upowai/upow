@@ -239,7 +239,7 @@ class Transaction:
         if self.transaction_type == TransactionType.INODE_DE_REGISTRATION:
             from upow.database import Database
             address = await self.inputs[0].get_address()
-            inputs = await Database.instance.get_inode_registration_outputs(address, check_pending_txs=True)
+            inputs = await Database.instance.get_inode_registration_outputs(address)
             if not inputs:
                 print('This address is not registered as an inode.')
                 return False
