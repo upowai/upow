@@ -150,6 +150,12 @@ def round_up_decimal(decimal: Decimal, round_up_length: str = '0.00000001'):
     return decimal
 
 
+def round_up_decimal_new(decimal: Decimal, round_up_length: str = '0.00000001'):
+    round_up_length = Decimal(round_up_length)
+    decimal = decimal.quantize(round_up_length)
+    return decimal
+
+
 def bytes_to_string(point_bytes: bytes) -> str:
     point = bytes_to_point(point_bytes)
     if len(point_bytes) == 64:

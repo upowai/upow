@@ -1,3 +1,4 @@
+import decimal
 import hashlib
 from decimal import Decimal
 from io import BytesIO
@@ -14,7 +15,7 @@ from .helpers import (
     bytes_to_string,
     string_to_bytes,
     TransactionType,
-    round_up_decimal,
+    round_up_decimal, round_up_decimal_new,
 )
 from .upow_transactions import CoinbaseTransaction, Transaction, TransactionOutput
 
@@ -144,7 +145,7 @@ def get_block_reward(block_no):
     return Decimal(current_reward)
 
 
-def get_inode_rewards(reward, inode_address_details):
+def get_inode_rewards(reward, inode_address_details, block_no=1):
     total_percent = sum(entry["emission"] for entry in inode_address_details)
     if not inode_address_details or total_percent <= 0:
         return reward, {}
@@ -153,29 +154,37 @@ def get_inode_rewards(reward, inode_address_details):
     distributed_rewards = {}
     redistribution_reward = Decimal(0)
 
-    for address_detail in inode_address_details:
-        percent = address_detail["emission"]
-        address_reward = distribution_reward * Decimal(percent) / Decimal(total_percent)
-        address_reward = round_up_decimal(address_reward)
-        if percent >= 1:
-            distributed_rewards[address_detail["wallet"]] = address_reward
-        else:
-            redistribution_reward += (
-                distribution_reward * Decimal(percent) / Decimal(total_percent)
-            )
+    with decimal.localcontext() as ctx:
+        ctx.prec = 9 if block_no > 39000 else ctx.prec
+        for address_detail in inode_address_details:
+            percent = address_detail["emission"]
+            address_reward = distribution_reward * Decimal(percent) / Decimal(total_percent)
+            if block_no > 39000:
+                address_reward = round_up_decimal_new(address_reward)
+            else:
+                address_reward = round_up_decimal(address_reward)
+            if percent >= 1:
+                distributed_rewards[address_detail["wallet"]] = address_reward
+            else:
+                redistribution_reward += (
+                    distribution_reward * Decimal(percent) / Decimal(total_percent)
+                )
 
-        # Redistribute reward among addresses with 1 percent or more
-        if redistribution_reward > 0:
-            num_eligible_addresses = sum(
-                1 for entry in inode_address_details if entry["emission"] >= 1
-            )
-            redistribution_amount = redistribution_reward / num_eligible_addresses
-            redistribution_amount = round_up_decimal(redistribution_amount)
-            for inode_address_detail in inode_address_details:
-                if inode_address_detail["emission"] >= 1:
-                    distributed_rewards[
-                        inode_address_detail["wallet"]
-                    ] += redistribution_amount
+            # Redistribute reward among addresses with 1 percent or more
+            if redistribution_reward > 0:
+                num_eligible_addresses = sum(
+                    1 for entry in inode_address_details if entry["emission"] >= 1
+                )
+                redistribution_amount = redistribution_reward / num_eligible_addresses
+                if block_no > 39000:
+                    redistribution_amount = round_up_decimal_new(redistribution_amount)
+                else:
+                    redistribution_amount = round_up_decimal(redistribution_amount)
+                for inode_address_detail in inode_address_details:
+                    if inode_address_detail["emission"] >= 1:
+                        distributed_rewards[
+                            inode_address_detail["wallet"]
+                        ] += redistribution_amount
 
     return miner_reward, distributed_rewards
 
@@ -605,7 +614,7 @@ async def create_block(
 
     active_inodes = await database.get_active_inodes(check_pending_txs=True)
     block_reward = get_block_reward(block_no)
-    miner_reward, inode_rewards = get_inode_rewards(block_reward, active_inodes)
+    miner_reward, inode_rewards = get_inode_rewards(block_reward, active_inodes, block_no=block_no)
     genesis_block_content = await database.get_genesis_block()
     if genesis_block_content is not None:
         _, genesis_address, _, _, _, _ = split_block_content(genesis_block_content)
