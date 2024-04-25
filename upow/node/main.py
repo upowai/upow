@@ -1,27 +1,25 @@
 import random
+import re
 from asyncio import gather
 from collections import deque, defaultdict
 from os import environ
-import re
 
 from asyncpg import UniqueViolationError
 from fastapi import FastAPI, Body, Query
 from fastapi.responses import RedirectResponse
-
-from httpx import TimeoutException
 from icecream import ic
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from starlette.background import BackgroundTasks, BackgroundTask
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-
-from upow.database import Database
-from upow.helpers import timestamp, sha256, transaction_to_json
 import upow.helpers
+from upow.constants import VERSION, ENDIAN, MAX_SUPPLY
+from upow.database import Database
+from upow.helpers import timestamp, sha256
 from upow.manager import (
     create_block,
     get_difficulty,
@@ -31,12 +29,11 @@ from upow.manager import (
     calculate_difficulty,
     clear_pending_transactions,
     block_to_bytes,
-    get_transactions_merkle_tree_ordered, get_circulating_supply,
+    get_circulating_supply, create_block_in_syncing_3900,
 )
 from upow.node.nodes_manager import NodesManager, NodeInterface
 from upow.node.utils import ip_is_local
 from upow.upow_transactions import Transaction, CoinbaseTransaction
-from upow.constants import VERSION, ENDIAN, MAX_SUPPLY
 
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
@@ -88,9 +85,11 @@ async def create_blocks(blocks: list):
         block = block_info["block"]
         txs_hex = block_info["transactions"]
         txs = [await Transaction.from_hex(tx) for tx in txs_hex]
+        cb_tx: CoinbaseTransaction
         for tx in txs:
             if isinstance(tx, CoinbaseTransaction):
                 txs.remove(tx)
+                cb_tx = tx
                 break
         hex_txs = [tx.hex() for tx in txs]
         block["merkle_tree"] = get_transactions_merkle_tree(hex_txs)
@@ -114,12 +113,21 @@ async def create_blocks(blocks: list):
         #         if sha256(block_content) == block['hash']:
         #             break
         assert i == block["id"]
-        if not await create_block(
-            block_content.hex() if isinstance(block_content, bytes) else block_content,
-            txs,
-            last_block,
-        ):
-            return False
+        if i <= 39000:
+            if not await create_block_in_syncing_3900(
+                    block_content.hex() if isinstance(block_content, bytes) else block_content,
+                    txs,
+                    cb_tx,
+                    last_block,
+            ):
+                return False
+        else:
+            if not await create_block(
+                block_content.hex() if isinstance(block_content, bytes) else block_content,
+                txs,
+                last_block,
+            ):
+                return False
         last_block = block
         i += 1
     return True
