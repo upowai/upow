@@ -1,7 +1,7 @@
 requests~=2.31.0
 fastapi~=0.110.2
 slowapi~=0.1.9
-fastecdsa~=2.3.0
+fastecdsa~=2.3.2
 icecream~=2.1.3
 asyncpg~=0.29.0
 uvicorn~=0.29.0
