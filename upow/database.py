@@ -365,7 +365,7 @@ class Database:
         for block in blocks:
             block = normalize_block(block)
             block_hash = block['hash']
-            txs = OLD_BLOCKS_TRANSACTIONS_ORDER.get(block_hash) or index[block_hash]
+            txs = index[block_hash]
             tx_hashes = index_tx_hash[block_hash]
             size += sum(len(tx) for tx in txs)
             if size > MAX_BLOCK_SIZE_HEX * 8:
