@@ -8,7 +8,7 @@ from typing import Tuple, List, Union
 from icecream import ic
 
 from .constants import MAX_SUPPLY, ENDIAN, MAX_BLOCK_SIZE_HEX, SMALLEST
-from .database import OLD_BLOCKS_TRANSACTIONS_ORDER, Database
+from .database import OLD_BLOCKS_TRANSACTIONS_ORDER, Database, emission_details
 from .helpers import (
     sha256,
     timestamp,
@@ -612,7 +612,7 @@ async def create_block(
         split_block_content(block_content)
     )
 
-    active_inodes = await database.get_active_inodes(check_pending_txs=True)
+    active_inodes = await database.get_active_inodes()
     block_reward = get_block_reward(block_no)
     miner_reward, inode_rewards = get_inode_rewards(block_reward, active_inodes, block_no=block_no)
     genesis_block_content = await database.get_genesis_block()
@@ -636,6 +636,91 @@ async def create_block(
                 for inode_address, reward in inode_rewards.items()
             ]
         )
+
+    # if not coinbase_transaction.outputs[0].verify():
+    if not all(tx_output.verify() for tx_output in coinbase_transaction.outputs):
+        return False
+
+    await database.add_block(
+        block_no,
+        block_hash,
+        block_content,
+        address,
+        random,
+        difficulty,
+        block_reward + fees,
+        content_time,
+    )
+    await database.add_transaction(coinbase_transaction, block_hash)
+
+    try:
+        await database.add_transactions(transactions, block_hash)
+        if len(transactions) > 1 and block_no < 22500:
+            OLD_BLOCKS_TRANSACTIONS_ORDER.set(
+                block_hash, [transaction.hex() for transaction in transactions]
+            )
+    except Exception as e:
+        print(f"a transaction has not been added in block", e)
+        await database.delete_block(block_no)
+        return False
+    # await database.add_unspent_transactions_outputs(transactions + [coinbase_transaction])
+    await database.add_transaction_outputs(transactions + [coinbase_transaction])
+    if transactions:
+        await database.remove_pending_transactions_by_hash(
+            [transaction.hash() for transaction in transactions]
+        )
+        # await database.remove_unspent_outputs(transactions)
+        await database.remove_outputs(transactions)
+        await database.remove_pending_spent_outputs(transactions)
+
+    _print(
+        f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees}"
+    )
+    Manager.difficulty = None
+    try:
+        emission_details.set(str(block_no), [{"power": str(inode["power"]),
+                                              "emission": str(inode["emission"]),
+                                              "wallet": str(inode["wallet"]),
+                                              "inode_reward": [str(reward) for inode_address, reward in
+                                                               inode_rewards.items() if
+                                                               inode_address == inode["wallet"]]
+                                              }
+                                             for inode in active_inodes])
+    except Exception as e:
+        print(e)
+        pass
+    return True
+
+
+async def create_block_in_syncing_3900(
+    block_content: str, transactions: List[Transaction],
+        cb_transaction: CoinbaseTransaction,
+        last_block: dict = None, error_list=None
+):
+    if error_list is None:
+        error_list = []
+    Manager.difficulty = None
+    if last_block is None or last_block["id"] % BLOCKS_COUNT == 0:
+        difficulty, last_block = await calculate_difficulty()
+    else:
+        # fixme temp fix
+        difficulty, last_block = await get_difficulty()
+        # difficulty = Decimal(str(last_block['difficulty']))
+    if not await check_block(block_content, transactions, (difficulty, last_block)):
+        return False
+
+    database: Database = Database.instance
+    block_no = last_block["id"] + 1 if last_block != {} else 1
+    block_hash = sha256(block_content)
+    previous_hash, address, merkle_tree, content_time, content_difficulty, random = (
+        split_block_content(block_content)
+    )
+
+    block_reward = get_block_reward(block_no)
+
+    fees = sum(transaction.fees for transaction in transactions)
+
+    coinbase_transaction = cb_transaction
 
     # if not coinbase_transaction.outputs[0].verify():
     if not all(tx_output.verify() for tx_output in coinbase_transaction.outputs):
