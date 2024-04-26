@@ -18,15 +18,9 @@ Inode miners receive their rewards in the form of uPow coins. You have the optio
 
 ## Installation Steps
 
-### 1. Install Python 3.8.9
+### 1. Install Python 3.11.9
 
-The uPow blockchain requires Python version 3.8.9. Use the provided Makefile to automate the installation process.
-
-```bash
-make -f makefile.python3.8.9 install_python3.8.9
-```
-
-This command will update your system, install necessary dependencies, download Python 3.8.9, compile it, and perform the installation.
+The uPow blockchain requires Python version 3.11.9.
 
 ### 2. Install PostgreSQL 14
 
