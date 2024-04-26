@@ -85,7 +85,7 @@ async def create_blocks(blocks: list):
         block = block_info["block"]
         txs_hex = block_info["transactions"]
         txs = [await Transaction.from_hex(tx) for tx in txs_hex]
-        cb_tx: CoinbaseTransaction
+        cb_tx = None
         for tx in txs:
             if isinstance(tx, CoinbaseTransaction):
                 txs.remove(tx)
@@ -113,7 +113,7 @@ async def create_blocks(blocks: list):
         #         if sha256(block_content) == block['hash']:
         #             break
         assert i == block["id"]
-        if i <= 39000:
+        if i <= 48308:
             if not await create_block_in_syncing_3900(
                     block_content.hex() if isinstance(block_content, bytes) else block_content,
                     txs,

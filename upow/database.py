@@ -16,6 +16,7 @@ from .upow_transactions import Transaction, CoinbaseTransaction, TransactionInpu
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 OLD_BLOCKS_TRANSACTIONS_ORDER = pickledb.load(dir_path + '/old_block_transactions_order.json', True)
+emission_details = pickledb.load(dir_path + '/emission_details.json', True)
 
 
 class Database:
@@ -1013,7 +1014,7 @@ class Database:
                                                                       check_pending_txs=check_pending_txs)
         vote_stake_ratio = [(vote * await self.get_address_stake(delegate)) / 10
                             for tx_hash, validator_address, vote, delegate, index in validator_ballot]
-        sum_vote_stake_ratio = sum(vote_stake_ratio)
+        sum_vote_stake_ratio = sum(vote_stake_ratio, Decimal(0))
         sum_vote_stake_ratio = round_up_decimal(sum_vote_stake_ratio)
         return sum_vote_stake_ratio
 
@@ -1207,7 +1208,7 @@ class Database:
             votes = [((Decimal(vote['vote']) / SMALLEST), vote['validator']) for vote in
                      inode_ballot]  # Calc will be (vote*stake) / 10
             vote_stake_ratio = [(vote * await self.get_validators_stake(validator)) / 10 for vote, validator in votes]
-            sum_vote_stake_ratio = sum(vote_stake_ratio)
+            sum_vote_stake_ratio = sum(vote_stake_ratio, Decimal(0))
             sum_vote_stake_ratio = round_up_decimal(sum_vote_stake_ratio)
             return sum_vote_stake_ratio
 

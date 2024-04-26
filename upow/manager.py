@@ -8,7 +8,7 @@ from typing import Tuple, List, Union
 from icecream import ic
 
 from .constants import MAX_SUPPLY, ENDIAN, MAX_BLOCK_SIZE_HEX, SMALLEST
-from .database import OLD_BLOCKS_TRANSACTIONS_ORDER, Database
+from .database import OLD_BLOCKS_TRANSACTIONS_ORDER, Database, emission_details
 from .helpers import (
     sha256,
     timestamp,
@@ -612,7 +612,7 @@ async def create_block(
         split_block_content(block_content)
     )
 
-    active_inodes = await database.get_active_inodes(check_pending_txs=True)
+    active_inodes = await database.get_active_inodes()
     block_reward = get_block_reward(block_no)
     miner_reward, inode_rewards = get_inode_rewards(block_reward, active_inodes, block_no=block_no)
     genesis_block_content = await database.get_genesis_block()
@@ -677,6 +677,18 @@ async def create_block(
         f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees}"
     )
     Manager.difficulty = None
+    try:
+        emission_details.set(str(block_no), [{"power": str(inode["power"]),
+                                              "emission": str(inode["emission"]),
+                                              "wallet": str(inode["wallet"]),
+                                              "inode_reward": [str(reward) for inode_address, reward in
+                                                               inode_rewards.items() if
+                                                               inode_address == inode["wallet"]]
+                                              }
+                                             for inode in active_inodes])
+    except Exception as e:
+        print(e)
+        pass
     return True
 
 
