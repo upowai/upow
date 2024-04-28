@@ -227,7 +227,8 @@ async def startup():
 
 
 @app.get("/")
-async def root():
+@limiter.limit("3/minute")
+async def root(request: Request):
     return {
         "ok": True,
         "version": VERSION,
@@ -460,7 +461,8 @@ LAST_PENDING_TRANSACTIONS_CLEAN = [0]
 
 
 @app.get("/get_mining_info")
-async def get_mining_info(background_tasks: BackgroundTasks):
+@limiter.limit("3/minute")
+async def get_mining_info(request: Request, background_tasks: BackgroundTasks):
     Manager.difficulty = None
     difficulty, last_block = await get_difficulty()
     pending_transactions = await db.get_pending_transactions_limit(hex_only=True)
