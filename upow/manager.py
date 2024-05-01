@@ -698,7 +698,7 @@ async def create_block(
     return True
 
 
-async def create_block_in_syncing_3900(
+async def create_block_in_syncing_old(
     block_content: str, transactions: List[Transaction],
         cb_transaction: CoinbaseTransaction,
         last_block: dict = None, error_list=None
