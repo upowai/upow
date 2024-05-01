@@ -327,6 +327,8 @@ async def push_tx(
     tx_hex: str = None,
     body=Body(False),
 ):
+    if is_syncing:
+        return {"ok": False, "error": "Node is already syncing"}
     if body and tx_hex is None:
         tx_hex = body["tx_hex"]
     tx = await Transaction.from_hex(tx_hex)
