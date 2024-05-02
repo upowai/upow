@@ -132,8 +132,10 @@ async def check_block_is_valid(block_content: str, mining_info: tuple = None) ->
 
 def get_block_reward(block_no):
     assert block_no > 0
-    halving_interval = 3 * 365 * 24 * 60  # 3 years in minutes
-    if block_no > halving_interval * 9:
+    halving_interval = 1576800  # 3 years in minutes
+
+    nine_halving_interval = 14191200
+    if block_no > nine_halving_interval:
         return Decimal(0)
     coins_per_block = 6
     # Calculate the number of halvings that have occurred
@@ -678,21 +680,25 @@ async def create_block(
     )
     Manager.difficulty = None
     try:
-        emission_details.set(str(block_no), [{"power": str(inode["power"]),
-                                              "emission": str(inode["emission"]),
-                                              "wallet": str(inode["wallet"]),
-                                              "inode_reward": [str(reward) for inode_address, reward in
-                                                               inode_rewards.items() if
-                                                               inode_address == inode["wallet"]]
-                                              }
-                                             for inode in active_inodes])
+        inode_power_emission_n_rewards = []
+
+        for inode in active_inodes:
+            wallet = inode["wallet"]
+            reward = str(inode_rewards.get(wallet, ""))
+            inode_power_emission_n_rewards.append({
+                "power": str(inode["power"]),
+                "emission": str(inode["emission"]),
+                "wallet": wallet,
+                "inode_reward": reward
+            })
+        emission_details.set(str(block_no), inode_power_emission_n_rewards)
     except Exception as e:
         print(e)
         pass
     return True
 
 
-async def create_block_in_syncing_3900(
+async def create_block_in_syncing_old(
     block_content: str, transactions: List[Transaction],
         cb_transaction: CoinbaseTransaction,
         last_block: dict = None, error_list=None

@@ -451,11 +451,11 @@ class Transaction:
                     logging.error('Delegate voting power bug')
                     return False
 
-                if await Database.instance.get_delegates_all_power(address, check_pending_txs=True):
+                if await Database.instance.get_delegates_all_power(address):
                     logging.error('Delegate already have voting power')
                     return False
             else:
-                if not await Database.instance.get_delegates_all_power(address, check_pending_txs=True):
+                if not await Database.instance.get_delegates_all_power(address):
                     logging.error('Delegate doesnt have voting power')
                     return False
 
