@@ -29,7 +29,7 @@ from upow.manager import (
     calculate_difficulty,
     clear_pending_transactions,
     block_to_bytes,
-    get_circulating_supply, create_block_in_syncing_3900,
+    get_circulating_supply, create_block_in_syncing_old,
 )
 from upow.node.nodes_manager import NodesManager, NodeInterface
 from upow.node.utils import ip_is_local
@@ -114,7 +114,7 @@ async def create_blocks(blocks: list):
         #             break
         assert i == block["id"]
         if i <= 48308:
-            if not await create_block_in_syncing_3900(
+            if not await create_block_in_syncing_old(
                     block_content.hex() if isinstance(block_content, bytes) else block_content,
                     txs,
                     cb_tx,
@@ -327,6 +327,8 @@ async def push_tx(
     tx_hex: str = None,
     body=Body(False),
 ):
+    if is_syncing:
+        return {"ok": False, "error": "Node is already syncing"}
     if body and tx_hex is None:
         tx_hex = body["tx_hex"]
     tx = await Transaction.from_hex(tx_hex)
@@ -461,7 +463,7 @@ LAST_PENDING_TRANSACTIONS_CLEAN = [0]
 
 
 @app.get("/get_mining_info")
-@limiter.limit("3/minute")
+@limiter.limit("20/minute")
 async def get_mining_info(request: Request, background_tasks: BackgroundTasks):
     Manager.difficulty = None
     difficulty, last_block = await get_difficulty()
