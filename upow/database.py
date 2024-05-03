@@ -1402,7 +1402,7 @@ class Database:
         async with self.pool.acquire() as connection:
             is_confirm: bool = True
             res = await connection.fetchrow(
-                '''SELECT tx_hex, tx_hash, block_hash, inputs_addresses, blocks.id AS block_no 
+                '''SELECT tx_hex, tx_hash, block_hash, inputs_addresses, blocks.id AS block_no, blocks.timestamp
                 FROM transactions INNER JOIN blocks  ON (transactions.block_hash = blocks.hash) WHERE tx_hash = $1''',
                 tx_hash)
             if res is None:
@@ -1414,7 +1414,9 @@ class Database:
         tx = await Transaction.from_hex(res['tx_hex'], False)
         if isinstance(tx, CoinbaseTransaction):
             transaction = {'is_coinbase': True, 'hash': res['tx_hash'], 'block_hash': res.get('block_hash'),
-                           'block_no': res.get('block_no')}
+                           'block_no': res.get('block_no'),
+                           'datetime': res.get('timestamp'),
+                           }
         else:
             delta = None
             if address is not None:
@@ -1429,6 +1431,7 @@ class Database:
                         delta += tx_output.amount
             transaction = {'is_coinbase': False, 'hash': res['tx_hash'], 'block_hash': res.get('block_hash'),
                            'block_no': res.get('block_no'),
+                           'datetime': res.get('timestamp'),
                            'message': tx.message.hex() if tx.message is not None else None,
                            'transaction_type': tx.transaction_type.name,
                            'is_confirm': is_confirm,
