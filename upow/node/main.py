@@ -463,7 +463,7 @@ LAST_PENDING_TRANSACTIONS_CLEAN = [0]
 
 
 @app.get("/get_mining_info")
-@limiter.limit("20/minute")
+@limiter.limit("6/minute")
 async def get_mining_info(request: Request, background_tasks: BackgroundTasks):
     Manager.difficulty = None
     difficulty, last_block = await get_difficulty()
@@ -840,5 +840,5 @@ async def get_supply_info(request: Request):
     last_block_id = await db.get_next_block_id()
     last_block_id = last_block_id - 1 if last_block_id > 0 else last_block_id
     circulating_supply = get_circulating_supply(last_block_id)
-    supply_info = {"max_supply": MAX_SUPPLY, "circulating_supply": circulating_supply}
+    supply_info = {"max_supply": MAX_SUPPLY, "circulating_supply": circulating_supply, "block_height": last_block_id}
     return {"ok": True, "result": supply_info}
