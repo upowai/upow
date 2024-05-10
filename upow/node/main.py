@@ -463,7 +463,7 @@ LAST_PENDING_TRANSACTIONS_CLEAN = [0]
 
 
 @app.get("/get_mining_info")
-@limiter.limit("6/minute")
+@limiter.limit("10/minute")
 async def get_mining_info(request: Request, background_tasks: BackgroundTasks):
     Manager.difficulty = None
     difficulty, last_block = await get_difficulty()
