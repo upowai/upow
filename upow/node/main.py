@@ -835,10 +835,13 @@ async def dobby_info(request: Request):
 
 
 @app.get("/get_supply_info")
-@limiter.limit("10/minute")
+@limiter.limit("20/minute")
 async def get_supply_info(request: Request):
-    last_block_id = await db.get_next_block_id()
-    last_block_id = last_block_id - 1 if last_block_id > 0 else last_block_id
+    last_block = await db.get_last_block()
+    last_block_id = last_block["id"]
     circulating_supply = get_circulating_supply(last_block_id)
-    supply_info = {"max_supply": MAX_SUPPLY, "circulating_supply": circulating_supply, "block_height": last_block_id}
+    supply_info = {"max_supply": MAX_SUPPLY,
+                   "circulating_supply": circulating_supply,
+                   "last_block": last_block
+                   }
     return {"ok": True, "result": supply_info}
