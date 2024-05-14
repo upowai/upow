@@ -490,7 +490,7 @@ async def get_validators_info(
     background_tasks: BackgroundTasks,
     inode: str = None,
     offset: int = 0,
-    limit: int = Query(default=20, le=1000),
+    limit: int = Query(default=100, le=1000),
 ):
     if inode:
         inode_ballot = await db.get_inode_ballot_by_address(offset, limit, inode=inode)
@@ -520,7 +520,7 @@ async def get_delegates_info(
     background_tasks: BackgroundTasks,
     validator: str = None,
     offset: int = 0,
-    limit: int = Query(default=20, le=1000),
+    limit: int = Query(default=100, le=1000),
 ):
     if validator:
         validator_ballot = await db.get_validator_ballot_by_address(
