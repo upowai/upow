@@ -463,7 +463,7 @@ LAST_PENDING_TRANSACTIONS_CLEAN = [0]
 
 
 @app.get("/get_mining_info")
-@limiter.limit("20/minute")
+@limiter.limit("10/minute")
 async def get_mining_info(request: Request, background_tasks: BackgroundTasks):
     Manager.difficulty = None
     difficulty, last_block = await get_difficulty()
@@ -490,7 +490,7 @@ async def get_validators_info(
     background_tasks: BackgroundTasks,
     inode: str = None,
     offset: int = 0,
-    limit: int = Query(default=20, le=1000),
+    limit: int = Query(default=100, le=1000),
 ):
     if inode:
         inode_ballot = await db.get_inode_ballot_by_address(offset, limit, inode=inode)
@@ -520,7 +520,7 @@ async def get_delegates_info(
     background_tasks: BackgroundTasks,
     validator: str = None,
     offset: int = 0,
-    limit: int = Query(default=20, le=1000),
+    limit: int = Query(default=100, le=1000),
 ):
     if validator:
         validator_ballot = await db.get_validator_ballot_by_address(
@@ -835,10 +835,13 @@ async def dobby_info(request: Request):
 
 
 @app.get("/get_supply_info")
-@limiter.limit("10/minute")
+@limiter.limit("20/minute")
 async def get_supply_info(request: Request):
-    last_block_id = await db.get_next_block_id()
-    last_block_id = last_block_id - 1 if last_block_id > 0 else last_block_id
+    last_block = await db.get_last_block()
+    last_block_id = last_block["id"]
     circulating_supply = get_circulating_supply(last_block_id)
-    supply_info = {"max_supply": MAX_SUPPLY, "circulating_supply": circulating_supply}
+    supply_info = {"max_supply": MAX_SUPPLY,
+                   "circulating_supply": circulating_supply,
+                   "last_block": last_block
+                   }
     return {"ok": True, "result": supply_info}
