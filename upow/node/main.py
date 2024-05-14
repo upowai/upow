@@ -1,11 +1,13 @@
+import json
 import random
 import re
 from asyncio import gather
 from collections import deque, defaultdict
-from os import environ
+from os import environ, path
+from typing import Annotated, Union
 
 from asyncpg import UniqueViolationError
-from fastapi import FastAPI, Body, Query
+from fastapi import FastAPI, Body, Query, Header
 from fastapi.responses import RedirectResponse
 from icecream import ic
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -34,6 +36,7 @@ from upow.manager import (
 from upow.node.nodes_manager import NodesManager, NodeInterface
 from upow.node.utils import ip_is_local
 from upow.upow_transactions import Transaction, CoinbaseTransaction
+from upow.upow_wallet.utils import create_transaction
 
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
@@ -261,6 +264,12 @@ async def middleware(request: Request, call_next):
     if "Sender-Node" in request.headers:
         NodesManager.add_node(request.headers["Sender-Node"])
 
+    if normalized_path == '/send_to_address' and not (ip_is_local(hostname) or hostname == "localhost"):
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "error": "Access forbidden. This endpoint can only be accessed from localhost."},
+        )
+
     if nodes and not started or (ip_is_local(hostname) or hostname == "localhost"):
         try:
             node_url = nodes[0]
@@ -310,6 +319,12 @@ async def middleware(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def exception_handler(request: Request, e: Exception):
+    if type(e).__name__ == 'Exception':
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"Exception: {str(e)}"},
+        )
+
     return JSONResponse(
         status_code=500,
         content={"ok": False, "error": f"Uncaught {type(e).__name__} exception"},
@@ -317,6 +332,23 @@ async def exception_handler(request: Request, e: Exception):
 
 
 transactions_cache = deque(maxlen=100)
+
+
+async def verify_and_push_tx(tx: Transaction, request: Request,
+                             background_tasks: BackgroundTasks):
+    if tx.hash() in transactions_cache:
+        return {"ok": False, "error": "Transaction just added"}
+    try:
+        if await db.add_pending_transaction(tx):
+            if "Sender-Node" in request.headers:
+                NodesManager.update_last_message(request.headers["Sender-Node"])
+            background_tasks.add_task(propagate, "push_tx", {"tx_hex": tx.hex()})
+            transactions_cache.append(tx.hash())
+            return {"ok": True, "result": "Transaction has been accepted"}
+        else:
+            return {"ok": False, "error": "Transaction has not been added"}
+    except UniqueViolationError:
+        return {"ok": False, "error": "Transaction already present"}
 
 
 @app.get("/push_tx")
@@ -332,19 +364,49 @@ async def push_tx(
     if body and tx_hex is None:
         tx_hex = body["tx_hex"]
     tx = await Transaction.from_hex(tx_hex)
-    if tx.hash() in transactions_cache:
-        return {"ok": False, "error": "Transaction just added"}
-    try:
-        if await db.add_pending_transaction(tx):
-            if "Sender-Node" in request.headers:
-                NodesManager.update_last_message(request.headers["Sender-Node"])
-            background_tasks.add_task(propagate, "push_tx", {"tx_hex": tx_hex})
-            transactions_cache.append(tx.hash())
-            return {"ok": True, "result": "Transaction has been accepted"}
-        else:
-            return {"ok": False, "error": "Transaction has not been added"}
-    except UniqueViolationError:
-        return {"ok": False, "error": "Transaction already present"}
+    result = await verify_and_push_tx(tx, request, background_tasks)
+    return result
+
+
+@app.get("/send_to_address")
+@app.post("/send_to_address")
+async def send_to_address(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    to_address: str = None,
+    amount=None,
+    body=Body(False),
+    authorization: Annotated[Union[str], Header()] = None,
+):
+    if body:
+        if "to_address" in body:
+            to_address = body["to_address"]
+        if "amount" in body:
+            amount = body["amount"]
+
+    if not to_address or not amount:
+        return JSONResponse(
+            status_code=422,
+            content={"ok": False, "error": f"Missing required params."})
+
+    current_dir = path.dirname(path.abspath(__file__))
+    json_file_path = path.join(current_dir, '..', 'upow_wallet', 'key_pair_list.json')
+
+    selected_private_key = None
+    with open(json_file_path, 'r') as json_file:
+        data = json.load(json_file)
+        for key in data.get("keys"):
+            if key.get("public_key") == authorization:
+                selected_private_key = key.get("private_key")
+
+    if not selected_private_key:
+        return {"ok": False, "error": "Unauthorized"}
+    tx = await create_transaction(
+        selected_private_key, to_address, amount, None
+    )
+
+    result = await verify_and_push_tx(tx, request, background_tasks)
+    return result
 
 
 @app.post("/push_block")
