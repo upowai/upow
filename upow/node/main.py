@@ -426,7 +426,7 @@ async def push_block(
         if "block_content" in body:
             block_content = body["block_content"]
         if "id" in body:
-            block_no = body["id"]
+            return {"ok": False, "error": "Deprecated"}
         if "block_no" in body:
             block_no = body["block_no"]
     if isinstance(txs, str):

@@ -104,7 +104,7 @@ def mine_block(
                 json={
                     "block_content": block_candidate.hex(),
                     "txs": pending_tx_hashes,
-                    "id": previous_block["id"] + 1,
+                    "block_no": previous_block["id"] + 1,
                 },
                 timeout=20 + int((len(pending_tx_hashes) or 1) / 3),
             )
