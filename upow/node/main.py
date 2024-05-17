@@ -613,7 +613,7 @@ async def get_delegates_info(
 
 
 @app.get("/get_address_info")
-@limiter.limit("10/second")
+@limiter.limit("5/minute")
 async def get_address_info(
     request: Request,
     address: str,
