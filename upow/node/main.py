@@ -319,7 +319,7 @@ async def middleware(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def exception_handler(request: Request, e: Exception):
-    if type(e).__name__ == 'Exception':
+    if type(e).__name__ == 'Exception' or type(e).__name__ == 'AssertionError':
         return JSONResponse(
             status_code=500,
             content={"ok": False, "error": f"Exception: {str(e)}"},
@@ -336,15 +336,16 @@ transactions_cache = deque(maxlen=100)
 
 async def verify_and_push_tx(tx: Transaction, request: Request,
                              background_tasks: BackgroundTasks):
-    if tx.hash() in transactions_cache:
+    tx_hash = tx.hash()
+    if tx_hash in transactions_cache:
         return {"ok": False, "error": "Transaction just added"}
     try:
         if await db.add_pending_transaction(tx):
             if "Sender-Node" in request.headers:
                 NodesManager.update_last_message(request.headers["Sender-Node"])
             background_tasks.add_task(propagate, "push_tx", {"tx_hex": tx.hex()})
-            transactions_cache.append(tx.hash())
-            return {"ok": True, "result": "Transaction has been accepted"}
+            transactions_cache.append(tx_hash)
+            return {"ok": True, "result": "Transaction has been accepted", "tx_hash": tx_hash}
         else:
             return {"ok": False, "error": "Transaction has not been added"}
     except UniqueViolationError:
@@ -389,6 +390,7 @@ async def send_to_address(
             status_code=422,
             content={"ok": False, "error": f"Missing required params."})
 
+    amount = str(amount)
     current_dir = path.dirname(path.abspath(__file__))
     json_file_path = path.join(current_dir, '..', 'upow_wallet', 'key_pair_list.json')
 
