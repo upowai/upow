@@ -40,7 +40,7 @@ class NodesManager:
     nodes: list = None
     db = db
 
-    timeout = httpx.Timeout(3)
+    timeout = httpx.Timeout(5)
     async_client = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
 
     @staticmethod

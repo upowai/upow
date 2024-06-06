@@ -180,7 +180,7 @@ class Transaction:
     def _verify_outputs(self):
         return self.outputs and all(tx_output.verify() for tx_output in self.outputs)
 
-    async def verify(self, check_double_spend: bool = True) -> bool:
+    async def verify(self, check_double_spend: bool = True, verifying_add_pending: bool = False) -> bool:
         if check_double_spend and not self._verify_double_spend_same_transaction():
             print('double spend inside same transaction')
             return False
@@ -215,7 +215,7 @@ class Transaction:
         if not await self.verify_vote_as_validator_transaction():
             return False
 
-        if not await self.verify_vote_as_delegate_transaction():
+        if not await self.verify_vote_as_delegate_transaction(verifying_add_pending=verifying_add_pending):
             return False
 
         if self.transaction_type in (TransactionType.REVOKE_AS_VALIDATOR, TransactionType.REVOKE_AS_DELEGATE):
@@ -285,7 +285,7 @@ class Transaction:
                 return False
         return True
 
-    async def verify_vote_as_delegate_transaction(self):
+    async def verify_vote_as_delegate_transaction(self, verifying_add_pending: bool = False):
         if self.transaction_type == TransactionType.VOTE_AS_DELEGATE:
             vote_range = sum(tx_output.amount for tx_output in self.outputs
                              if tx_output.transaction_type == OutputType.VOTE_AS_DELEGATE)
@@ -304,7 +304,8 @@ class Transaction:
                 print(f"This address is registered as inode. Cannot vote.")
                 return False
 
-            is_delegate = await Database.instance.get_stake_outputs(address)
+            is_delegate = await Database.instance.get_stake_outputs(address,
+                                                                    check_pending_txs=verifying_add_pending)
             if not is_delegate:
                 print(f"This address is not staked anything. Cannot vote.")
                 return False
@@ -476,7 +477,7 @@ class Transaction:
         return True
 
     async def verify_pending(self):
-        return await self.verify() and await self.verify_double_spend_pending()
+        return await self.verify(verifying_add_pending=True) and await self.verify_double_spend_pending()
 
     def sign(self, private_keys: list = []):
         for private_key in private_keys:
