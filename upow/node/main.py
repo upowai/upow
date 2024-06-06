@@ -72,7 +72,7 @@ async def propagate(path: str, args: dict, ignore_url=None, nodes: list = None):
             continue
         aws.append(node_interface.request(path, args, self_node.url))
     for response in await gather(*aws, return_exceptions=True):
-        print("path: ", path, "node response: ", response)
+        print(path, response)
 
 
 async def create_blocks(blocks: list):
