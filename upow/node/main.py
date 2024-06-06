@@ -871,7 +871,7 @@ async def get_block_details(request: Request, block: str):
 
 
 @app.get("/get_blocks")
-@limiter.limit("10/minute")
+@limiter.limit("40/minute")
 async def get_blocks(
     request: Request, offset: int, limit: int = Query(default=..., le=1000)
 ):
