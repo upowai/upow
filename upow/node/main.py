@@ -527,7 +527,7 @@ LAST_PENDING_TRANSACTIONS_CLEAN = [0]
 
 
 @app.get("/get_mining_info")
-@limiter.limit("10/minute")
+@limiter.limit("30/minute")
 async def get_mining_info(request: Request, background_tasks: BackgroundTasks):
     Manager.difficulty = None
     difficulty, last_block = await get_difficulty()
@@ -766,6 +766,35 @@ async def get_address_info(
             ),
         },
     }
+
+
+@app.get("/get_address_transactions")
+@limiter.limit("10/second")
+async def get_address_transactions(
+        request: Request,
+        address: str,
+        page: int = Query(default=1, ge=1),
+        limit: int = Query(default=5, le=20)):
+    offset = (page - 1) * limit
+    transactions = (
+        await db.get_address_transactions(
+            address,
+            limit=limit,
+            offset=offset,
+            check_signatures=True,
+        )
+        if limit > 0
+        else []
+    )
+
+    return {"ok": True,
+            "result": {
+                "transactions": [
+                    await db.get_nice_transaction(tx.hash())
+                    for tx in transactions
+                ]
+            }
+            }
 
 
 @app.get("/add_node")
