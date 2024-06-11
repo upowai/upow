@@ -212,10 +212,16 @@ async def _sync_blockchain(node_url: str = None):
 
 
 async def sync_blockchain(node_url: str = None):
+    global is_syncing
     try:
+        is_syncing = True
+        upow.helpers.is_blockchain_syncing = True
         await _sync_blockchain(node_url)
     except Exception as e:
-        print(e)
+        print(f'sync_blockchain error: {e}')
+    finally:
+        is_syncing = False
+        upow.helpers.is_blockchain_syncing = False
         return
 
 
@@ -517,11 +523,7 @@ async def sync(request: Request, node_url: str = None):
     global is_syncing
     if is_syncing:
         return {"ok": False, "error": "Node is already syncing"}
-    is_syncing = True
-    upow.helpers.is_blockchain_syncing = True
     await sync_blockchain(node_url)
-    is_syncing = False
-    upow.helpers.is_blockchain_syncing = False
 
 
 LAST_PENDING_TRANSACTIONS_CLEAN = [0]
