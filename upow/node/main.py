@@ -212,10 +212,16 @@ async def _sync_blockchain(node_url: str = None):
 
 
 async def sync_blockchain(node_url: str = None):
+    global is_syncing
     try:
+        is_syncing = True
+        upow.helpers.is_blockchain_syncing = True
         await _sync_blockchain(node_url)
     except Exception as e:
-        print(e)
+        print(f'sync_blockchain error: {e}')
+    finally:
+        is_syncing = False
+        upow.helpers.is_blockchain_syncing = False
         return
 
 
@@ -517,11 +523,7 @@ async def sync(request: Request, node_url: str = None):
     global is_syncing
     if is_syncing:
         return {"ok": False, "error": "Node is already syncing"}
-    is_syncing = True
-    upow.helpers.is_blockchain_syncing = True
     await sync_blockchain(node_url)
-    is_syncing = False
-    upow.helpers.is_blockchain_syncing = False
 
 
 LAST_PENDING_TRANSACTIONS_CLEAN = [0]
@@ -616,12 +618,12 @@ async def get_delegates_info(
 
 
 @app.get("/get_address_info")
-@limiter.limit("5/minute")
+@limiter.limit("15/second")
 async def get_address_info(
     request: Request,
     address: str,
-    transactions_count_limit: int = Query(default=5, le=50),
-    page: int = Query(default=1, ge=1),
+    # transactions_count_limit: int = Query(default=5, le=50),
+    # page: int = Query(default=1, ge=1),
     show_pending: bool = False,
     verify: bool = False,
     stake_outputs: bool = False,
@@ -636,17 +638,111 @@ async def get_address_info(
     stake = await db.get_address_stake(address)
     balance = sum(output.amount for output in outputs)
 
-    offset = (page - 1) * transactions_count_limit
-    transactions = (
-        await db.get_address_transactions(
-            address,
-            limit=transactions_count_limit,
-            offset=offset,
-            check_signatures=True,
-        )
-        if transactions_count_limit > 0
-        else []
+    pending_transactions = (
+        [
+            await db.get_nice_transaction(
+                tx.hash(), address if verify else None
+            )
+            for tx in await db.get_address_pending_transactions(address, True)
+        ]
+        if show_pending
+        else None
     )
+
+    pending_spent_outputs = (
+        await db.get_address_pending_spent_outputs(address)
+        if show_pending
+        else None
+    )
+
+    stake_output_list = (
+        [
+            {
+                "amount": "{:f}".format(output.amount),
+                "tx_hash": output.tx_hash,
+                "index": output.index,
+            }
+            for output in await db.get_stake_outputs(address)
+        ]
+        if stake_outputs
+        else None
+    )
+
+    delegate_spent_votes_list = (
+        [
+            {
+                "amount": "{:f}".format(output.amount),
+                "tx_hash": output.tx_hash,
+                "index": output.index,
+            }
+            for output in await db.get_delegates_spent_votes(address)
+        ]
+        if delegate_spent_votes
+        else None
+    )
+
+    delegate_unspent_votes_list = (
+        [
+            {
+                "amount": "{:f}".format(output.amount),
+                "tx_hash": output.tx_hash,
+                "index": output.index,
+            }
+            for output in await db.get_delegates_voting_power(address)
+        ]
+        if delegate_unspent_votes
+        else None
+    )
+
+    inode_registration_output_list = (
+        [
+            {
+                "amount": "{:f}".format(output.amount),
+                "tx_hash": output.tx_hash,
+                "index": output.index,
+            }
+            for output in await db.get_inode_registration_outputs(address)
+        ]
+        if inode_registration_outputs
+        else None
+    )
+
+    validator_unspent_vote_list = (
+        [
+            {
+                "amount": "{:f}".format(output.amount),
+                "tx_hash": output.tx_hash,
+                "index": output.index,
+            }
+            for output in await db.get_validators_voting_power(address)
+        ]
+        if validator_unspent_votes
+        else None
+    )
+
+    validator_spent_votes_list = (
+        [
+            {
+                "amount": "{:f}".format(output.amount),
+                "tx_hash": output.tx_hash,
+                "index": output.index,
+            }
+            for output in await db.get_validators_spent_votes(address)
+        ]
+        if validator_spent_votes
+        else None
+    )
+    is_inode = await db.is_inode_registered(address) if address_state else None
+    is_inode_active = (
+        any(
+            entry.get("wallet") == address
+            for entry in await db.get_active_inodes(check_pending_txs=True)
+        )
+        if address_state
+        else None
+    )
+    is_validator = await db.is_validator_registered(address) if address_state else None
+
     return {
         "ok": True,
         "result": {
@@ -660,117 +756,23 @@ async def get_address_info(
                 }
                 for output in outputs
             ],
-            "transactions": [
-                await db.get_nice_transaction(tx.hash(), address if verify else None)
-                for tx in transactions
-            ],
-            "pending_transactions": (
-                [
-                    await db.get_nice_transaction(
-                        tx.hash(), address if verify else None
-                    )
-                    for tx in await db.get_address_pending_transactions(address, True)
-                ]
-                if show_pending
-                else None
-            ),
-            "pending_spent_outputs": (
-                await db.get_address_pending_spent_outputs(address)
-                if show_pending
-                else None
-            ),
-            "stake_outputs": (
-                [
-                    {
-                        "amount": "{:f}".format(output.amount),
-                        "tx_hash": output.tx_hash,
-                        "index": output.index,
-                    }
-                    for output in await db.get_stake_outputs(address)
-                ]
-                if stake_outputs
-                else None
-            ),
-            "delegate_spent_votes": (
-                [
-                    {
-                        "amount": "{:f}".format(output.amount),
-                        "tx_hash": output.tx_hash,
-                        "index": output.index,
-                    }
-                    for output in await db.get_delegates_spent_votes(address)
-                ]
-                if delegate_spent_votes
-                else None
-            ),
-            "delegate_unspent_votes": (
-                [
-                    {
-                        "amount": "{:f}".format(output.amount),
-                        "tx_hash": output.tx_hash,
-                        "index": output.index,
-                    }
-                    for output in await db.get_delegates_voting_power(address)
-                ]
-                if delegate_unspent_votes
-                else None
-            ),
-            "inode_registration_outputs": (
-                [
-                    {
-                        "amount": "{:f}".format(output.amount),
-                        "tx_hash": output.tx_hash,
-                        "index": output.index,
-                    }
-                    for output in await db.get_inode_registration_outputs(address)
-                ]
-                if inode_registration_outputs
-                else None
-            ),
-            "validator_unspent_votes": (
-                [
-                    {
-                        "amount": "{:f}".format(output.amount),
-                        "tx_hash": output.tx_hash,
-                        "index": output.index,
-                    }
-                    for output in await db.get_validators_voting_power(address)
-                ]
-                if validator_unspent_votes
-                else None
-            ),
-            "validator_spent_votes": (
-                [
-                    {
-                        "amount": "{:f}".format(output.amount),
-                        "tx_hash": output.tx_hash,
-                        "index": output.index,
-                    }
-                    for output in await db.get_validators_spent_votes(address)
-                ]
-                if validator_spent_votes
-                else None
-            ),
-            "is_inode": (
-                await db.is_inode_registered(address) if address_state else None
-            ),
-            "is_inode_active": (
-                any(
-                    entry.get("wallet") == address
-                    for entry in await db.get_active_inodes(check_pending_txs=True)
-                )
-                if address_state
-                else None
-            ),
-            "is_validator": (
-                await db.is_validator_registered(address) if address_state else None
-            ),
+            # "transactions": nice_transaction,
+            "pending_transactions": pending_transactions,
+            "pending_spent_outputs": pending_spent_outputs,
+            "stake_outputs": stake_output_list,
+            "delegate_spent_votes": delegate_spent_votes_list,
+            "delegate_unspent_votes": delegate_unspent_votes_list,
+            "inode_registration_outputs": inode_registration_output_list,
+            "validator_unspent_votes": validator_unspent_vote_list,
+            "validator_spent_votes": validator_spent_votes_list,
+            "is_inode": is_inode,
+            "is_inode_active": is_inode_active,
+            "is_validator": is_validator,
         },
     }
 
 
 @app.get("/get_address_transactions")
-@limiter.limit("10/second")
 async def get_address_transactions(
         request: Request,
         address: str,
