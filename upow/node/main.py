@@ -725,14 +725,19 @@ async def get_address_info(
         else None
     )
     is_inode = await db.is_inode_registered(address) if address_state else None
-    is_inode_active = (
-        any(
-            entry.get("wallet") == address
-            for entry in await db.get_active_inodes(check_pending_txs=True)
-        )
-        if address_state
-        else None
-    )
+    is_inode_active = None
+    if address_state:
+        if is_inode:
+            is_inode_active = (
+                any(
+                    entry.get("wallet") == address
+                    for entry in await db.get_active_inodes(check_pending_txs=True)
+                )
+                if address_state
+                else None
+            )
+        else:
+            is_inode_active = False
     is_validator = await db.is_validator_registered(address) if address_state else None
 
     return {
