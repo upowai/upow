@@ -1,5 +1,6 @@
 import json
 import os
+from json import JSONDecodeError
 from os.path import dirname, exists
 from random import sample
 
@@ -46,7 +47,14 @@ class NodesManager:
     @staticmethod
     def init():
         core_url = CORE_URL.rstrip("/")
-        NodesManager.db._loaddb()
+        try:
+            NodesManager.db._loaddb()
+        except JSONDecodeError as e:
+            print(e)
+            with open(path, 'wt') as f:
+                json.dump({}, f)
+            NodesManager.db._loaddb()
+
         NodesManager.nodes = NodesManager.db.get("nodes") or [core_url]
         # print("Loaded nodes:", NodesManager.nodes)
         NodesManager.last_messages = NodesManager.db.get("last_messages") or {
