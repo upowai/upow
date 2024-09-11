@@ -513,10 +513,16 @@ async def check_block(
             len(set(check_inputs)) != len(check_inputs)
             or set(check_inputs) - set(unspent_outputs) != set()
         ):
-            print("double spend in block")
             spent_outputs = set(check_inputs) - set(unspent_outputs)
-            print(len(spent_outputs))
-            return False
+            if block_no == 286523 and set(spent_outputs) - set(double_spend_input_list) == set():
+                # double spend in block 286523
+                pass
+            else:
+                print("double spend in block")
+                print(len(spent_outputs))
+                print(spent_outputs)
+                return False
+
         if (
             len(set(check_inode_inputs)) != len(check_inode_inputs)
             or set(check_inode_inputs) - set(unspent_inode_outputs) != set()
@@ -769,6 +775,14 @@ async def create_block_in_syncing_old(
     )
     Manager.difficulty = None
     return True
+
+double_spend_input_list = [
+    ('16c519171bfa7ee7d42af0d84fe731433048a1aedfd5df692b8beaa755ef6eb9', 0),
+    ('747d753fcfecdce5d3a080666ff139ca9123d72d2eb529386f2c3f9f4a55f983', 1),
+    ('856b36ecd55a3a427cc988550457435ee9dd7580a423bc3177c1d173b50ff101', 1),
+    ('af33808f839698734d801e907f1eb1c24c3547d4cdd984ed0f2e41c58c6d1d9a', 1),
+    ('db843078e1fd5f1bbf1c2f550f87548df6fe714ccd12a0ba4a1e25e10fea3ae0', 1),
+    ('eb10fd11319aeee7a21766b85c89580f6c3f509a6afaf743df717ca91d33e0da', 1)]
 
 
 class Manager:
