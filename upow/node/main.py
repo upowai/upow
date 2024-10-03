@@ -3,6 +3,7 @@ import random
 import re
 from asyncio import gather
 from collections import deque, defaultdict
+from decimal import Decimal
 from os import environ, path
 from typing import Annotated, Union
 
@@ -31,7 +32,7 @@ from upow.manager import (
     calculate_difficulty,
     clear_pending_transactions,
     block_to_bytes,
-    get_circulating_supply, create_block_in_syncing_old,
+    get_circulating_supply, create_block_in_syncing_old, get_inodes_from_cache,
 )
 from upow.node.nodes_manager import NodesManager, NodeInterface
 from upow.node.utils import ip_is_local
@@ -731,7 +732,7 @@ async def get_address_info(
             is_inode_active = (
                 any(
                     entry.get("wallet") == address
-                    for entry in await db.get_active_inodes(check_pending_txs=True)
+                    for entry in await get_inodes_from_cache()
                 )
                 if address_state
                 else None
@@ -918,13 +919,15 @@ async def get_blocks_details(
 
 
 @app.get("/dobby_info")
-@limiter.limit("10/minute")
+@limiter.limit("20/minute")
 async def dobby_info(request: Request):
-    # inode_with_vote = await db.get_all_registered_inode_with_vote(check_pending_txs=True)
-    inode_with_vote = await db.get_active_inodes()
-    for item in inode_with_vote:
-        item["emission"] = str(item["emission"]) + "%"
-    return {"ok": True, "result": inode_with_vote}
+    inode_with_vote = await get_inodes_from_cache()
+    response_data = [
+        {**item, "emission": f"{item['emission']:.2f}%" if isinstance(item['emission'], Decimal) else str(
+            item['emission']) + "%"}
+        for item in inode_with_vote
+    ]
+    return {"ok": True, "result": response_data}
 
 
 @app.get("/get_supply_info")

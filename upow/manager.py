@@ -1,3 +1,4 @@
+import asyncio
 import decimal
 import hashlib
 from decimal import Decimal
@@ -18,11 +19,15 @@ from .helpers import (
     round_up_decimal, round_up_decimal_new,
 )
 from .upow_transactions import CoinbaseTransaction, Transaction, TransactionOutput
+from datetime import datetime, timedelta
 
 BLOCK_TIME = 60
 BLOCKS_COUNT = Decimal(100)
 LAST_BLOCK_FOR_GENESIS_KEY = 10000
 START_DIFFICULTY = Decimal("6.0")
+cache = {}
+cache_expiration = timedelta(minutes=5)
+cache_updating = False
 
 _print = print
 print = ic
@@ -783,6 +788,35 @@ double_spend_input_list = [
     ('af33808f839698734d801e907f1eb1c24c3547d4cdd984ed0f2e41c58c6d1d9a', 1),
     ('db843078e1fd5f1bbf1c2f550f87548df6fe714ccd12a0ba4a1e25e10fea3ae0', 1),
     ('eb10fd11319aeee7a21766b85c89580f6c3f509a6afaf743df717ca91d33e0da', 1)]
+
+
+async def update_cache() -> None:
+    """Fetch new inodes from the database and update the cache."""
+    global cache_updating
+    if cache_updating:
+        return
+    cache_updating = True
+    db: Database = Database.instance
+    cache['inodes'] = await db.get_active_inodes()
+    cache['timestamp'] = datetime.utcnow()
+    cache_updating = False
+
+
+async def get_inodes_from_cache() -> List[dict]:
+    now = datetime.utcnow()
+
+    # Check if the cache is valid
+    if 'inodes' in cache and (now - cache['timestamp']) < cache_expiration:
+        # If the cache is valid, return it immediately
+        return cache['inodes']
+
+    if not cache:
+        await asyncio.create_task(update_cache())
+    else:
+        asyncio.create_task(update_cache())
+
+    # Optionally, return the last known cache or an empty list while updating
+    return cache.get('inodes', [])
 
 
 class Manager:
