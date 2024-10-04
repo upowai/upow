@@ -626,6 +626,8 @@ async def create_block(
     )
 
     active_inodes = await database.get_active_inodes()
+    update_active_inodes_cache_with_data(active_inodes)
+
     block_reward = get_block_reward(block_no)
     miner_reward, inode_rewards = get_inode_rewards(block_reward, active_inodes, block_no=block_no)
     genesis_block_content = await database.get_genesis_block()
@@ -801,6 +803,10 @@ async def update_cache() -> None:
     cache['timestamp'] = datetime.utcnow()
     cache_updating = False
 
+
+async def update_active_inodes_cache_with_data(active_inodes) -> None:
+    cache['inodes'] = active_inodes
+    cache['timestamp'] = datetime.utcnow()
 
 async def get_inodes_from_cache() -> List[dict]:
     now = datetime.utcnow()

@@ -9,6 +9,7 @@ import asyncpg
 import pickledb
 from asyncpg import Connection, Pool, UndefinedColumnError, UndefinedTableError
 
+import upow
 from .constants import MAX_BLOCK_SIZE_HEX, SMALLEST
 from .helpers import sha256, point_to_string, string_to_point, point_to_bytes, AddressFormat, normalize_block, \
     TransactionType, OutputType, round_up_decimal
@@ -1172,6 +1173,7 @@ class Database:
         return [(address['address'], address['timestamp']) for address in registered_inode_address]
 
     async def get_active_inodes(self, check_pending_txs: bool = False):
+        upow.helpers.getting_active_inodes = True
         inode_with_vote = await self.get_all_registered_inode_with_vote(check_pending_txs)
         total_power = sum(item["power"] for item in inode_with_vote)
         for item in inode_with_vote:
@@ -1180,6 +1182,7 @@ class Database:
             time_difference = datetime.utcnow() - item["registered_at"]
             item["is_active"] = item["emission"] >= 1 or time_difference <= timedelta(hours=48)
         active_inodes = [item for item in inode_with_vote if item["is_active"] is True]
+        upow.helpers.getting_active_inodes = False
         return active_inodes
 
     async def get_inode_vote_ratio_by_address(self, address: str, check_pending_txs: bool = False):

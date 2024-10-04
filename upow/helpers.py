@@ -19,6 +19,7 @@ _print = print
 
 logging.basicConfig(level=logging.INFO if '--nologs' not in sys.argv else logging.WARNING)
 is_blockchain_syncing = False
+getting_active_inodes = False
 
 def log(s):
     logging.getLogger('upow').info(s)

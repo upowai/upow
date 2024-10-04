@@ -423,6 +423,8 @@ async def push_block(
 ):
     if is_syncing:
         return {"ok": False, "error": "Node is already syncing"}
+    if upow.helpers.getting_active_inodes:
+        return {"ok": False, "error": "Server is busy"}
     if body:
         txs = body["txs"]
         if "block_content" in body:
