@@ -3,7 +3,6 @@ import os
 import time
 from os.path import dirname, exists
 from typing import Set, Dict
-from pydantic import BaseSettings
 
 
 class IPManager:
@@ -21,7 +20,7 @@ class IPManager:
         current_time = time.time()
         if current_time - self.last_update > self.cache_duration:
             if exists(self.path):
-                with open(Settings().CONFIG_FILE, 'r') as config_file:
+                with open(self.path, 'r') as config_file:
                     self.config = json.load(config_file)
                     self.whitelist = set(self.config.get('whitelist', []))
                     self.blocklist = set(self.config.get('blocklist', []))
@@ -52,6 +51,6 @@ class IPManager:
         return endpoint in self.block_endpoints
 
 
-class Settings(BaseSettings):
+class Settings:
     CONFIG_FILE: str = "ip_config.json"
     CACHE_DURATION: int = 300  # 5 minutes default
