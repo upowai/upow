@@ -1,4 +1,3 @@
-import logging
 from decimal import Decimal
 from io import BytesIO
 from typing import List
@@ -12,8 +11,11 @@ from .coinbase_transaction import CoinbaseTransaction
 from ..constants import ENDIAN, SMALLEST, CURVE, MAX_INODES
 from ..helpers import point_to_string, bytes_to_string, sha256, TransactionType, get_transaction_type_from_message, \
     OutputType, InputType
+from ..my_logger import CustomLogger
 
 print = ic
+logger = CustomLogger(__name__).get_logger()
+TRANSACTION_TAG = "TRANSACTION"
 
 
 class Transaction:
@@ -127,7 +129,7 @@ class Transaction:
         spent_outputs = await Database.instance.get_pending_spent_outputs(check_inputs)
         is_true = spent_outputs == []
         if not is_true:
-            logging.error(f'Double spending in pending {spent_outputs}')
+            logger.error(f'Double spending in pending {spent_outputs}')
         return is_true
 
     async def _fill_transaction_inputs(self, txs=None) -> None:
@@ -148,14 +150,14 @@ class Transaction:
         checked_signatures = []
         for tx_input in self.inputs:
             if tx_input.signed is None:
-                print('not signed')
+                logger.error('not signed')
                 return False
             await tx_input.get_public_key()
             signature = (tx_input.public_key, tx_input.signed)
             if signature in checked_signatures:
                 continue
             if not await tx_input.verify(tx_hex):
-                print('signature not valid')
+                logger.error('signature not valid')
                 return False
             checked_signatures.append(signature)
         return True
@@ -165,14 +167,14 @@ class Transaction:
         checked_signatures = []
         for tx_input in self.inputs:
             if tx_input.signed is None:
-                print('not signed')
+                logger.error('not signed')
                 return False
             await tx_input.get_voter_public_key()
             signature = (tx_input.public_key, tx_input.signed)
             if signature in checked_signatures:
                 continue
             if not await tx_input.verify_revoke_tx(tx_hex):
-                print('voter signature not valid')
+                logger.error('voter signature not valid')
                 return False
             checked_signatures.append(signature)
         return True
@@ -182,11 +184,11 @@ class Transaction:
 
     async def verify(self, check_double_spend: bool = True, verifying_add_pending: bool = False) -> bool:
         if check_double_spend and not self._verify_double_spend_same_transaction():
-            print('double spend inside same transaction')
+            logger.error(f'{TRANSACTION_TAG if verifying_add_pending else ""} Double spend inside same transaction')
             return False
 
         if check_double_spend and not await self.verify_double_spend():
-            print('double spend')
+            logger.error(f'{TRANSACTION_TAG if verifying_add_pending else ""} Double spend')
             return False
 
         await self._fill_transaction_inputs()
@@ -226,11 +228,11 @@ class Transaction:
                 return False
 
         if not self._verify_outputs():
-            print('invalid outputs')
+            logger.error('invalid outputs')
             return False
 
         if await self.get_fees() < 0:
-            print('We are not the Federal Reserve')
+            logger.error('We are not the Federal Reserve')
             return False
 
         return True
@@ -241,13 +243,13 @@ class Transaction:
             address = await self.inputs[0].get_address()
             inputs = await Database.instance.get_inode_registration_outputs(address)
             if not inputs:
-                print('This address is not registered as an inode.')
+                logger.error('This address is not registered as an inode.')
                 return False
 
             active_inode_addresses = await Database.instance.get_active_inodes()
             is_inode_active = any(entry.get("wallet") == address for entry in active_inode_addresses)
             if is_inode_active:
-                print('This address is an active inode. Cannot de-register.')
+                logger.error('This address is an active inode. Cannot de-register.')
                 return False
         return True
 
@@ -256,23 +258,23 @@ class Transaction:
             vote_range = sum(tx_output.amount for tx_output in self.outputs
                              if tx_output.transaction_type == OutputType.VOTE_AS_VALIDATOR)
             if vote_range > 10:
-                print('Voting should be in range of 10')
+                logger.error('Voting should be in range of 10')
                 return False
 
             if vote_range <= 0:
-                print('Invalid voting range')
+                logger.error('Invalid voting range')
                 return False
 
             from upow.database import Database
             address = await self.inputs[0].get_address()
             is_inode_registered = await Database.instance.is_inode_registered(address, check_pending_txs=True)
             if is_inode_registered:
-                print(f"This address is registered as inode. Cannot vote.")
+                logger.error(f"This address is registered as inode. Cannot vote.")
                 return False
 
             is_validator_registered = await Database.instance.is_validator_registered(address, check_pending_txs=True)
             if not is_validator_registered:
-                print(f"This address is not registered as validator. Cannot vote.")
+                logger.error(f"This address is not registered as validator. Cannot vote.")
                 return False
 
             vote_receiving_address = ''
@@ -281,7 +283,7 @@ class Transaction:
                     vote_receiving_address = tx_output.address
 
             if not await Database.instance.is_inode_registered(vote_receiving_address, check_pending_txs=True):
-                print('Vote recipient is not registered as an inode.')
+                logger.error('Vote recipient is not registered as an inode.')
                 return False
         return True
 
@@ -290,24 +292,24 @@ class Transaction:
             vote_range = sum(tx_output.amount for tx_output in self.outputs
                              if tx_output.transaction_type == OutputType.VOTE_AS_DELEGATE)
             if vote_range > 10:
-                print('Voting should be in range of 10')
+                logger.error('Voting should be in range of 10')
                 return False
 
             if vote_range <= 0:
-                print('Invalid voting range')
+                logger.error('Invalid voting range')
                 return False
 
             from upow.database import Database
             address = await self.inputs[0].get_address()
             is_inode_registered = await Database.instance.is_inode_registered(address, check_pending_txs=True)
             if is_inode_registered:
-                print(f"This address is registered as inode. Cannot vote.")
+                logger.error(f"This address is registered as inode. Cannot vote.")
                 return False
 
             is_delegate = await Database.instance.get_stake_outputs(address,
                                                                     check_pending_txs=verifying_add_pending)
             if not is_delegate:
-                print(f"This address is not staked anything. Cannot vote.")
+                logger.error(f"This address is not staked anything. Cannot vote.")
                 return False
 
             vote_receiving_address = ''
@@ -316,7 +318,7 @@ class Transaction:
                     vote_receiving_address = tx_output.address
 
             if not await Database.instance.is_validator_registered(vote_receiving_address, check_pending_txs=True):
-                print('Vote recipient is not registered as a validator.')
+                logger.error('Vote recipient is not registered as a validator.')
                 return False
         return True
 
@@ -329,33 +331,33 @@ class Transaction:
                                             if tx_output.transaction_type == OutputType.INODE_REGISTRATION)
 
             if inode_registration_amount != 1000:
-                print('Inode registration amount is in correct')
+                logger.error('Inode registration amount is in correct')
                 return False
 
             stake_inputs = await Database.instance.get_stake_outputs(address)
             if not stake_inputs:
-                print(f"You are not a delegate. Become a delegate by staking.")
+                logger.error(f"You are not a delegate. Become a delegate by staking.")
                 return False
 
             is_inode_registered = await Database.instance.is_inode_registered(address, check_pending_txs=True)
             if is_inode_registered:
-                print(f"This address is already registered as inode.")
+                logger.error(f"This address is already registered as inode.")
                 return False
 
             is_validator_registered = await Database.instance.is_validator_registered(address, check_pending_txs=True)
             if is_validator_registered:
-                print(f"This address is registered as validator and a validator cannot be an inode.")
+                logger.error(f"This address is registered as validator and a validator cannot be an inode.")
                 return False
 
             inode_addresses = await Database.instance.get_active_inodes(check_pending_txs=True)
             if len(inode_addresses) >= MAX_INODES:
-                print(f"{MAX_INODES} inodes are already registered.")
+                logger.error(f"{MAX_INODES} inodes are already registered.")
                 return False
 
             active_inode_addresses = await Database.instance.get_active_inodes()
             is_inode_active = any(entry.get("wallet") == address for entry in active_inode_addresses)
             if is_inode_active:
-                print('This address is an active inode. Cannot de-register.')
+                logger.error('This address is an active inode. Cannot de-register.')
                 return False
         return True
 
@@ -365,31 +367,31 @@ class Transaction:
             address = await self.inputs[0].get_address()
             is_delegate = await Database.instance.get_stake_outputs(address)
             if not is_delegate:
-                print("You are not a delegate. Become a delegate by staking.")
+                logger.error("You are not a delegate. Become a delegate by staking.")
                 return False
 
             if await Database.instance.is_validator_registered(address, check_pending_txs=True):
-                print('validator already registered')
+                logger.error('validator already registered')
                 return False
 
             if await Database.instance.is_inode_registered(address, check_pending_txs=True):
-                print('Already registered as an inode')
+                logger.error('Already registered as an inode')
                 return False
 
             validator_reg_amount = sum(tx_output.amount for tx_output in self.outputs if
                                       tx_output.transaction_type == OutputType.VALIDATOR_REGISTRATION)
             if validator_reg_amount != 100:
-                print('validator reg amount is not correct')
+                logger.error('validator reg amount is not correct')
                 return False
 
             validator_voting_power = [tx_output for tx_output in self.outputs if
                                       tx_output.transaction_type == OutputType.VALIDATOR_VOTING_POWER]
             if len(validator_voting_power) != 1:
-                print('Validator voting power input bug')
+                logger.error('Validator voting power input bug')
                 return False
 
             if validator_voting_power[0].amount != 10:
-                print('Validator voting power bug')
+                logger.error('Validator voting power bug')
                 return False
         return True
 
@@ -399,17 +401,17 @@ class Transaction:
             address = await self.inputs[0].get_voter_address()
             is_validator_registered = await Database.instance.is_validator_registered(address, check_pending_txs=True)
             if not is_validator_registered:
-                print("This address is not registered as validator.")
+                logger.error("This address is not registered as validator.")
                 return False
             is_delegate = await Database.instance.get_stake_outputs(address)
             if not is_delegate:
-                print('This address is not registered as delegate. Cannot revoke')
+                logger.error('This address is not registered as delegate. Cannot revoke')
                 return False
 
             is_revoke_valid = [await Database.instance.is_revoke_valid(inode_ballot_input.tx_hash)
                                for inode_ballot_input in self.inputs]
             if not any(is_revoke_valid):
-                print('You can revoke after 48 hrs of voting')
+                logger.error('You can revoke after 48 hrs of voting')
                 return False
         return True
 
@@ -419,13 +421,13 @@ class Transaction:
             address = await self.inputs[0].get_voter_address()
             is_delegate = await Database.instance.get_stake_outputs(address)
             if not is_delegate:
-                print('This address is not registered as delegate. Cannot revoke')
+                logger.error('This address is not registered as delegate. Cannot revoke')
                 return False
 
             is_revoke_valid = [await Database.instance.is_revoke_valid(validator_ballot_input.tx_hash)
                                for validator_ballot_input in self.inputs]
             if not any(is_revoke_valid):
-                print('You can revoke after 48 hrs of voting')
+                logger.error('You can revoke after 48 hrs of voting')
                 return False
         return True
 
@@ -435,13 +437,13 @@ class Transaction:
             address = await self.inputs[0].get_address()
             stake_inputs = await Database.instance.get_stake_outputs(address)
             if stake_inputs and not upow.helpers.is_blockchain_syncing:
-                logging.error('Already staked')
+                logger.error('Already staked')
                 return False
 
             pending_stake_tx = await Database.instance.get_pending_stake_transaction(address)
             pending_stake_tx = [tx for tx in pending_stake_tx if tx.tx_hash != self.tx_hash]
             if pending_stake_tx:
-                logging.error('Already staked. Transaction is in pending')
+                logger.error('Already staked. Transaction is in pending')
                 return False
 
             tx_delegate_power = sum(tx_output.amount
@@ -449,15 +451,15 @@ class Transaction:
                                     if tx_output.transaction_type == OutputType.DELEGATE_VOTING_POWER)
             if tx_delegate_power > 0:
                 if tx_delegate_power != 10:
-                    logging.error('Delegate voting power bug')
+                    logger.error('Delegate voting power bug')
                     return False
 
                 if await Database.instance.get_delegates_all_power(address):
-                    logging.error('Delegate already have voting power')
+                    logger.error('Delegate already have voting power')
                     return False
             else:
                 if not await Database.instance.get_delegates_all_power(address):
-                    logging.error('Delegate doesnt have voting power')
+                    logger.error('Delegate doesnt have voting power')
                     return False
 
         return True
@@ -468,18 +470,20 @@ class Transaction:
             address = await self.inputs[0].get_address()
             if await Database.instance.get_delegates_spent_votes(address) \
                     and self.hash() not in ["8befeb253bc6eddd8501f5b27a02b195f5c06a51ccf788213cbedafe7cc49c53"]: # ignoring the revoke_as_delegate and unstake in same block
-                print('Kindly release the votes.')
+                logger.error('Kindly release the votes.')
                 return False
             pending_vote_tx = await Database.instance.get_pending_vote_as_delegate_transaction(address=address)
             if pending_vote_tx:
-                print('Kindly release the votes. Vote transaction is in pending')
+                logger.error('Kindly release the votes. Vote transaction is in pending')
                 return False
         return True
 
     async def verify_pending(self):
         return await self.verify(verifying_add_pending=True) and await self.verify_double_spend_pending()
 
-    def sign(self, private_keys: list = []):
+    def sign(self, private_keys=None):
+        if private_keys is None:
+            private_keys = []
         for private_key in private_keys:
             for input in self.inputs:
                 if input.private_key is None and (input.public_key or input.transaction):

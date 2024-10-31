@@ -34,6 +34,8 @@ from upow.manager import (
     block_to_bytes,
     get_circulating_supply, create_block_in_syncing_old, get_inodes_from_cache,
 )
+from upow.my_logger import CustomLogger
+from upow.node.ip_manager import IPManager
 from upow.node.nodes_manager import NodesManager, NodeInterface
 from upow.node.utils import ip_is_local
 from upow.upow_transactions import Transaction, CoinbaseTransaction
@@ -48,9 +50,10 @@ NodesManager.init()
 started = False
 is_syncing = False
 self_url = None
+ip_filter = IPManager()
 
 print = ic
-
+logger = CustomLogger(__name__).get_logger()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -77,7 +80,9 @@ async def propagate(path: str, args: dict, ignore_url=None, nodes: list = None):
         # print(path, response)
 
 
-async def create_blocks(blocks: list):
+async def create_blocks(blocks: list, error_list=None):
+    if error_list is None:
+        error_list = []
     _, last_block = await calculate_difficulty()
     last_block["id"] = last_block["id"] if last_block != {} else 0
     last_block["hash"] = (
@@ -123,6 +128,7 @@ async def create_blocks(blocks: list):
                 txs,
                 cb_tx,
                 last_block,
+                error_list=error_list
         ):
             return False
         last_block = block
@@ -131,11 +137,13 @@ async def create_blocks(blocks: list):
 
 
 async def _sync_blockchain(node_url: str = None):
-    print("sync blockchain")
+    logger.info("sync blockchain")
+    error = []
     if not node_url:
         nodes = NodesManager.get_recent_nodes()
         if not nodes:
-            return
+            logger.error(msg := "No nodes found.")
+            return msg
         node_url = random.choice(nodes)
     node_url = node_url.strip("/")
     _, last_block = await calculate_difficulty()
@@ -169,14 +177,14 @@ async def _sync_blockchain(node_url: str = None):
         try:
             blocks = await node_interface.get_blocks(i, limit)
         except Exception as e:
-            print(e)
+            logger.error(e)
             # NodesManager.get_nodes().remove(node_url)
             NodesManager.sync()
             break
         try:
             _, last_block = await calculate_difficulty()
             if not blocks:
-                print("syncing complete")
+                logger.info("syncing complete")
                 if last_block["id"] > starting_from:
                     NodesManager.update_last_message(node_url)
                     if timestamp() - last_block["timestamp"] < 86400:
@@ -193,29 +201,32 @@ async def _sync_blockchain(node_url: str = None):
                             },
                             node_url,
                         )
-                break
-            assert await create_blocks(blocks)
+                return True
+            assert await create_blocks(blocks, error_list=error)
         except Exception as e:
-            print(e)
+            logger.error(error[0] if error else e)
+
             if local_cache is not None:
-                print("sync failed, reverting back to previous chain")
+                logger.info("sync failed, reverting back to previous chain")
                 await db.delete_blocks(last_common_block)
                 await create_blocks(local_cache)
-            return
+            return error[0] if error else e
 
 
 async def sync_blockchain(node_url: str = None):
     global is_syncing
+    sync_status = None
     try:
         is_syncing = True
         upow.helpers.is_blockchain_syncing = True
-        await _sync_blockchain(node_url)
+        sync_status = await _sync_blockchain(node_url)
+
     except Exception as e:
-        print(f'sync_blockchain error: {e}')
+        logger.error(f'sync_blockchain error: {e}')
     finally:
         is_syncing = False
         upow.helpers.is_blockchain_syncing = False
-        return
+        return sync_status
 
 
 @app.on_event("startup")
@@ -252,6 +263,10 @@ async def middleware(request: Request, call_next):
     global started, self_url
     nodes = NodesManager.get_recent_nodes()
     hostname = request.base_url.hostname
+    client_ip = request.client.host
+
+    if not ip_filter.is_ip_allowed(client_ip):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Access forbidden."})
 
     # Normalize the URL path by removing extra slashes
     normalized_path = re.sub("/+", "/", request.scope["path"])
@@ -260,6 +275,9 @@ async def middleware(request: Request, call_next):
         new_url = str(url).replace(request.scope["path"], normalized_path)
         # Redirect to normalized URL
         return RedirectResponse(new_url)
+
+    if ip_filter.is_endpoint_blocked(normalized_path):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Access forbidden temporarily."})
 
     if "Sender-Node" in request.headers:
         NodesManager.add_node(request.headers["Sender-Node"])
@@ -312,13 +330,13 @@ async def middleware(request: Request, call_next):
                 propagate_old_transactions, propagate_txs
             )
         return response
-    except:
+    except Exception as e:
         raise
-        return {"ok": False, "error": "Internal error"}
 
 
 @app.exception_handler(Exception)
 async def exception_handler(request: Request, e: Exception):
+    logger.error(f"Error on {request.scope['path']}, {type(e).__name__}: {str(e)}")
     if type(e).__name__ == 'Exception' or type(e).__name__ == 'AssertionError':
         return JSONResponse(
             status_code=500,
@@ -338,18 +356,22 @@ async def verify_and_push_tx(tx: Transaction, request: Request,
                              background_tasks: BackgroundTasks):
     tx_hash = tx.hash()
     if tx_hash in transactions_cache:
-        return {"ok": False, "error": "Transaction just added"}
+        logger.error(error_msg := "Transaction just added")
+        return {"ok": False, "error": error_msg}
     try:
         if await db.add_pending_transaction(tx):
             if "Sender-Node" in request.headers:
                 NodesManager.update_last_message(request.headers["Sender-Node"])
             background_tasks.add_task(propagate, "push_tx", {"tx_hex": tx.hex()})
             transactions_cache.append(tx_hash)
+            logger.info(f"Transaction has been accepted: {tx_hash}")
             return {"ok": True, "result": "Transaction has been accepted", "tx_hash": tx_hash}
         else:
-            return {"ok": False, "error": "Transaction has not been added"}
+            logger.error(error_msg := "Transaction has been accepted")
+            return {"ok": False, "error": error_msg}
     except UniqueViolationError:
-        return {"ok": False, "error": "Transaction already present"}
+        logger.error(error_msg := "Transaction already present")
+        return {"ok": False, "error": error_msg}
 
 
 @app.get("/push_tx")
@@ -361,9 +383,11 @@ async def push_tx(
     body=Body(False),
 ):
     if is_syncing:
-        return {"ok": False, "error": "Node is already syncing"}
+        logger.warning(error := "Node is already syncing")
+        return {"ok": False, "error": error}
     if body and tx_hex is None:
         tx_hex = body["tx_hex"]
+    logger.info(f"IP: {request.client.host} tx_hex: {tx_hex}")
     tx = await Transaction.from_hex(tx_hex)
     result = await verify_and_push_tx(tx, request, background_tasks)
     return result
@@ -517,8 +541,16 @@ async def push_block(
 async def sync(request: Request, node_url: str = None):
     global is_syncing
     if is_syncing:
-        return {"ok": False, "error": "Node is already syncing"}
-    await sync_blockchain(node_url)
+        logger.warning(msg := "Node is already syncing")
+        return {"ok": False, "error": msg}
+    resp = await sync_blockchain(node_url)
+    if isinstance(resp, str):
+        logger.error(resp)
+        return {"ok": False, "error": resp}
+    if isinstance(resp, Exception):
+        logger.error(str(resp))
+        return {"ok": False, "error": str(resp)}
+    return {"ok": resp}
 
 
 LAST_PENDING_TRANSACTIONS_CLEAN = [0]

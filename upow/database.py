@@ -1,8 +1,9 @@
-import logging
+import asyncio
 import os
 from datetime import datetime, timedelta
 from decimal import Decimal
 from statistics import mean
+from time import perf_counter
 from typing import List, Union, Tuple, Dict, Any
 
 import asyncpg
@@ -13,11 +14,12 @@ import upow
 from .constants import MAX_BLOCK_SIZE_HEX, SMALLEST
 from .helpers import sha256, point_to_string, string_to_point, point_to_bytes, AddressFormat, normalize_block, \
     TransactionType, OutputType, round_up_decimal
+from .my_logger import CustomLogger
 from .upow_transactions import Transaction, CoinbaseTransaction, TransactionInput
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
-OLD_BLOCKS_TRANSACTIONS_ORDER = pickledb.load(dir_path + '/old_block_transactions_order.json', True)
 emission_details = pickledb.load(dir_path + '/emission_details.json', True)
+logger = CustomLogger(__name__).get_logger()
 
 
 class Database:
@@ -88,11 +90,13 @@ class Database:
         return Database.instance
 
     async def add_pending_transaction(self, transaction: Transaction, verify: bool = True):
+        logger.info('Adding in pending transaction')
         if isinstance(transaction, CoinbaseTransaction):
-            logging.error('CoinbaseTransaction in add_pending_transaction')
+            logger.error('CoinbaseTransaction in add_pending_transaction')
             return False
         tx_hex = transaction.hex()
         if verify and not await transaction.verify_pending():
+            logger.error('Error in adding transaction.')
             return False
         async with self.pool.acquire() as connection:
             await connection.execute(
@@ -592,16 +596,56 @@ class Database:
         if validator_ballot_input:
             await self.remove_validator_ballot_votes(validator_ballot_input)
 
-    async def remove_unspent_outputs(self, transactions: List[Transaction]) -> None:
+    async def remove_unspent_outputs(self, transactions: List[Transaction], max_retries: int = 3) -> bool:
+        """
+        Removes unspent outputs with proper error handling and retries.
+        Returns True if successful, False otherwise.
+        """
+        start_time = perf_counter()
         inputs = sum(
-            [[(tx_input.tx_hash, tx_input.index) for tx_input in transaction.inputs] for transaction in transactions],
+            [[(tx_input.tx_hash, tx_input.index)
+              for tx_input in transaction.inputs]
+             for transaction in transactions],
             [])
+
+        if not inputs:
+            return True
+
+        retry_delay = 0.2  # initial delay
         try:
             async with self.pool.acquire() as connection:
-                await connection.execute('DELETE FROM unspent_outputs WHERE (tx_hash, index) = ANY($1::tx_output[])',
-                                         inputs)
-        except:
-            await self.remove_unspent_outputs(transactions)
+                # Ensure serializable isolation for consistency
+                async with connection.transaction(isolation='serializable'):
+                    # Extract the input values into separate arrays
+                    tx_hashes, indices = zip(*inputs)
+
+                    # Delete the UTXOs
+                    delete_query = """
+                    DELETE FROM unspent_outputs 
+                    WHERE (tx_hash, index)
+                    IN (SELECT * FROM unnest($1::text[], $2::integer[]))
+                    RETURNING tx_hash, index
+                    """
+                    deleted = await connection.fetch(delete_query, tx_hashes, indices)
+
+                    # Verify the deletion
+                    if len(deleted) != len(inputs):
+                        logger.error(f"Failed to delete all UTXOs: {len(deleted)} of {len(inputs)} deleted")
+                        logger.error(f"Not deleted: {set(inputs) - set(deleted)}")
+                        return False
+
+                    duration = perf_counter() - start_time
+                    logger.info(f"Successfully removed {len(inputs)} unspent outputs in {duration:.3f} seconds")
+                    return True
+
+        except Exception as e:
+            if max_retries > 0:
+                await asyncio.sleep(retry_delay)
+                logger.error(f"Retrying remove_unspent_outputs due to error: {type(e).__name__}: {str(e)}")
+                return await self.remove_unspent_outputs(transactions, max_retries=max_retries-1)
+            else:
+                logger.error(f"Un success in remove_unspent_outputs due to error: {type(e).__name__}: {str(e)}")
+                return False
 
     async def remove_inode_registration_output(self, transactions: List[Transaction]) -> None:
         inputs = sum(
