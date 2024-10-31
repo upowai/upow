@@ -4,12 +4,13 @@ import hashlib
 from decimal import Decimal
 from io import BytesIO
 from math import ceil, floor, log
+from time import perf_counter
 from typing import Tuple, List, Union
 
 from icecream import ic
 
-from .constants import MAX_SUPPLY, ENDIAN, MAX_BLOCK_SIZE_HEX, SMALLEST
-from .database import OLD_BLOCKS_TRANSACTIONS_ORDER, Database, emission_details
+from .constants import MAX_SUPPLY, ENDIAN, MAX_BLOCK_SIZE_HEX
+from .database import Database, emission_details
 from .helpers import (
     sha256,
     timestamp,
@@ -18,6 +19,7 @@ from .helpers import (
     TransactionType,
     round_up_decimal, round_up_decimal_new,
 )
+from .my_logger import CustomLogger
 from .upow_transactions import CoinbaseTransaction, Transaction, TransactionOutput
 from datetime import datetime, timedelta
 
@@ -31,6 +33,7 @@ cache_updating = False
 
 _print = print
 print = ic
+logger = CustomLogger(__name__).get_logger()
 
 
 def difficulty_to_hashrate_old(difficulty: Decimal) -> int:
@@ -402,8 +405,10 @@ def split_block_content(block_content: str):
 
 
 async def check_block(
-    block_content: str, transactions: List[Transaction], mining_info: tuple = None
+    block_content: str, transactions: List[Transaction], mining_info: tuple = None, error_list=None
 ):
+    if error_list is None:
+        error_list = []
     if mining_info is None:
         mining_info = await calculate_difficulty()
     difficulty, last_block = mining_info
@@ -412,30 +417,37 @@ async def check_block(
         split_block_content(block_content)
     )
     if not await check_block_is_valid(block_content, mining_info):
-        print("block not valid")
+        error_list.append('block not valid')
+        logger.error('block not valid')
         return False
 
     content_time = int(content_time)
     if last_block != {} and previous_hash != last_block["hash"]:
+        error_list.append(error := "Previous hash is not matched")
+        logger.error(error)
         return False
 
     if (last_block["timestamp"] if "timestamp" in last_block else 0) > content_time:
-        print("timestamp younger than previous block")
+        error_list.append(error := "timestamp younger than previous block")
+        logger.error(error)
         return False
 
     if ((last_block["timestamp"] if "timestamp" in last_block else 0)
             == content_time):
-        print("timestamp younger than previous block")
+        error_list.append(error := "timestamp younger than previous block")
+        logger.error(error)
         return False
 
     if content_time > timestamp():
-        print("timestamp in the future")
+        error_list.append(error := "timestamp in the future")
+        logger.error(error)
         return False
 
     database: Database = Database.instance
     transactions = [tx for tx in transactions if isinstance(tx, Transaction)]
     if get_transactions_size(transactions) > MAX_BLOCK_SIZE_HEX:
-        print("block is too big")
+        error_list.append(error := "block is too big")
+        logger.error(error)
         return False
 
     if transactions:
@@ -519,20 +531,28 @@ async def check_block(
             or set(check_inputs) - set(unspent_outputs) != set()
         ):
             spent_outputs = set(check_inputs) - set(unspent_outputs)
-            if block_no == 286523 and set(spent_outputs) - set(double_spend_input_list) == set():
-                # double spend in block 286523
-                pass
+
+            if block_no in double_spend_dict:
+                allowed_spent_outputs = set(double_spend_dict[block_no])
+                # Allowable double-spend check for the current block number
+                if spent_outputs - allowed_spent_outputs == set():
+                    # All spent outputs in this block are allowable as per double_spend_dict
+                    pass
+                else:
+                    error_list.append(error := f"double spend in block: {block_no}, utxo: {spent_outputs}")
+                    logger.error(error)
+                    return False
             else:
-                print("double spend in block")
-                print(len(spent_outputs))
-                print(spent_outputs)
+                error_list.append(error := f"double spend in block: {block_no}, utxo: {spent_outputs}")
+                logger.error(error)
                 return False
 
         if (
             len(set(check_inode_inputs)) != len(check_inode_inputs)
             or set(check_inode_inputs) - set(unspent_inode_outputs) != set()
         ):
-            print("double spend in inode transaction in block")
+            error_list.append(error := "double spend in inode transaction in block")
+            logger.error(error)
             used_outputs = set(check_inode_inputs) - set(unspent_inode_outputs)
             print(len(used_outputs))
             return False
@@ -541,7 +561,8 @@ async def check_block(
             or set(validator_power_inputs) - set(unspent_validator_power_outputs)
             != set()
         ):
-            print("double spend in validator power transaction in block")
+            error_list.append(error := "double spend in validator power transaction in block")
+            logger.error(error)
             used_outputs = set(validator_power_inputs) - set(
                 unspent_validator_power_outputs
             )
@@ -551,7 +572,8 @@ async def check_block(
             len(set(delegate_power_inputs)) != len(delegate_power_inputs)
             or set(delegate_power_inputs) - set(unspent_delegate_power_outputs) != set()
         ):
-            print("double spend in delegate power transaction in block")
+            error_list.append(error := "double spend in delegate power transaction in block")
+            logger.error(error)
             used_outputs = set(delegate_power_inputs) - set(
                 unspent_delegate_power_outputs
             )
@@ -561,7 +583,8 @@ async def check_block(
             len(set(inode_ballot_inputs)) != len(inode_ballot_inputs)
             or set(inode_ballot_inputs) - set(inode_ballot_outputs) != set()
         ):
-            print("double spend in inode_ballot revoke transaction in block")
+            error_list.append(error := "double spend in inode_ballot revoke transaction in block")
+            logger.error(error)
             used_outputs = set(inode_ballot_inputs) - set(inode_ballot_outputs)
             print(len(used_outputs))
             return False
@@ -569,7 +592,8 @@ async def check_block(
             len(set(validator_ballot_inputs)) != len(validator_ballot_inputs)
             or set(validator_ballot_inputs) - set(validator_ballot_outputs) != set()
         ):
-            print("double spend in validators_ballot revoke transaction in block")
+            error_list.append(error := "double spend in validators_ballot revoke transaction in block")
+            logger.error(error)
             used_outputs = set(validator_ballot_inputs) - set(validator_ballot_outputs)
             print(len(used_outputs))
             return False
@@ -587,7 +611,8 @@ async def check_block(
 
     for transaction in transactions:
         if not await transaction.verify(check_double_spend=False):
-            print(f"transaction {transaction.hash()} has been not verified")
+            error_list.append(error := f"transaction {transaction.hash()} has been not verified")
+            logger.error(error)
             return False
 
     # transactions_merkle_tree = (
@@ -597,9 +622,10 @@ async def check_block(
     # )
     transactions_merkle_tree = get_transactions_merkle_tree(transactions)
     if merkle_tree != transactions_merkle_tree:
-        _print("merkle tree does not match")
         if block_no == 340510 and merkle_tree == '54e7e3fbfe5c3c7b2a74d14efd22a61c231d157b2c5c2476fca67736736b9ac8':
             return True
+        error_list.append(error := "merkle tree does not match")
+        logger.error(error)
         return False
 
     return True
@@ -610,6 +636,7 @@ async def create_block(
 ):
     if error_list is None:
         error_list = []
+    create_start_time = perf_counter()
     Manager.difficulty = None
     if last_block is None or last_block["id"] % BLOCKS_COUNT == 0:
         difficulty, last_block = await calculate_difficulty()
@@ -617,11 +644,12 @@ async def create_block(
         # fixme temp fix
         difficulty, last_block = await get_difficulty()
         # difficulty = Decimal(str(last_block['difficulty']))
-    if not await check_block(block_content, transactions, (difficulty, last_block)):
+    block_no = last_block["id"] + 1 if last_block != {} else 1
+    logger.info(f'Creating block no. {block_no}')
+    if not await check_block(block_content, transactions, (difficulty, last_block), error_list=error_list):
         return False
 
     database: Database = Database.instance
-    block_no = last_block["id"] + 1 if last_block != {} else 1
     block_hash = sha256(block_content)
     previous_hash, address, merkle_tree, content_time, content_difficulty, random = (
         split_block_content(block_content)
@@ -640,7 +668,8 @@ async def create_block(
         elif inode_rewards:
             pass
         else:
-            error_list.append("Emission detail is not formed. Hence you cannot mine currently.")
+            error_list.append(error := "Emission detail is not formed. Hence you cannot mine currently.")
+            logger.error(error)
             return False
 
     fees = sum(transaction.fees for transaction in transactions)
@@ -672,26 +701,22 @@ async def create_block(
 
     try:
         await database.add_transactions(transactions, block_hash)
-        if len(transactions) > 1 and block_no < 22500:
-            OLD_BLOCKS_TRANSACTIONS_ORDER.set(
-                block_hash, [transaction.hex() for transaction in transactions]
-            )
     except Exception as e:
-        print(f"a transaction has not been added in block", e)
+        logger.error(f"Transaction of {block_no} has not been added in block {e}")
         await database.delete_block(block_no)
         return False
-    # await database.add_unspent_transactions_outputs(transactions + [coinbase_transaction])
     await database.add_transaction_outputs(transactions + [coinbase_transaction])
     if transactions:
         await database.remove_pending_transactions_by_hash(
             [transaction.hash() for transaction in transactions]
         )
-        # await database.remove_unspent_outputs(transactions)
         await database.remove_outputs(transactions)
         await database.remove_pending_spent_outputs(transactions)
 
-    _print(
-        f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees}"
+    block_duration = perf_counter() - create_start_time
+    logger.info(
+        f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees} "
+        f"in {block_duration:.3f} seconds"
     )
     Manager.difficulty = None
     try:
@@ -708,7 +733,7 @@ async def create_block(
             })
         emission_details.set(str(block_no), inode_power_emission_n_rewards)
     except Exception as e:
-        print(e)
+        logger.error(f'Error in creating block: {block_no} {str(e)}')
         pass
     return True
 
@@ -720,6 +745,7 @@ async def create_block_in_syncing_old(
 ):
     if error_list is None:
         error_list = []
+    create_start_time = perf_counter()
     Manager.difficulty = None
     if last_block is None or last_block["id"] % BLOCKS_COUNT == 0:
         difficulty, last_block = await calculate_difficulty()
@@ -727,11 +753,12 @@ async def create_block_in_syncing_old(
         # fixme temp fix
         difficulty, last_block = await get_difficulty()
         # difficulty = Decimal(str(last_block['difficulty']))
-    if not await check_block(block_content, transactions, (difficulty, last_block)):
+    block_no = last_block["id"] + 1 if last_block != {} else 1
+    logger.info(f"Syncing block no. {block_no}")
+    if not await check_block(block_content, transactions, (difficulty, last_block), error_list=error_list):
         return False
 
     database: Database = Database.instance
-    block_no = last_block["id"] + 1 if last_block != {} else 1
     block_hash = sha256(block_content)
     previous_hash, address, merkle_tree, content_time, content_difficulty, random = (
         split_block_content(block_content)
@@ -761,12 +788,8 @@ async def create_block_in_syncing_old(
 
     try:
         await database.add_transactions(transactions, block_hash)
-        if len(transactions) > 1 and block_no < 22500:
-            OLD_BLOCKS_TRANSACTIONS_ORDER.set(
-                block_hash, [transaction.hex() for transaction in transactions]
-            )
     except Exception as e:
-        print(f"a transaction has not been added in block", e)
+        logger.error(f"a transaction has not been added in block {block_no}", e)
         await database.delete_block(block_no)
         return False
     # await database.add_unspent_transactions_outputs(transactions + [coinbase_transaction])
@@ -779,19 +802,36 @@ async def create_block_in_syncing_old(
         await database.remove_outputs(transactions)
         await database.remove_pending_spent_outputs(transactions)
 
-    _print(
-        f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees}"
+    block_duration = perf_counter() - create_start_time
+    logger.info(
+        f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees} "
+        f"in {block_duration:.3f} seconds"
     )
     Manager.difficulty = None
     return True
 
-double_spend_input_list = [
-    ('16c519171bfa7ee7d42af0d84fe731433048a1aedfd5df692b8beaa755ef6eb9', 0),
-    ('747d753fcfecdce5d3a080666ff139ca9123d72d2eb529386f2c3f9f4a55f983', 1),
-    ('856b36ecd55a3a427cc988550457435ee9dd7580a423bc3177c1d173b50ff101', 1),
-    ('af33808f839698734d801e907f1eb1c24c3547d4cdd984ed0f2e41c58c6d1d9a', 1),
-    ('db843078e1fd5f1bbf1c2f550f87548df6fe714ccd12a0ba4a1e25e10fea3ae0', 1),
-    ('eb10fd11319aeee7a21766b85c89580f6c3f509a6afaf743df717ca91d33e0da', 1)]
+double_spend_dict = {
+    286523: [
+        ('16c519171bfa7ee7d42af0d84fe731433048a1aedfd5df692b8beaa755ef6eb9', 0),
+        ('747d753fcfecdce5d3a080666ff139ca9123d72d2eb529386f2c3f9f4a55f983', 1),
+        ('856b36ecd55a3a427cc988550457435ee9dd7580a423bc3177c1d173b50ff101', 1),
+        ('af33808f839698734d801e907f1eb1c24c3547d4cdd984ed0f2e41c58c6d1d9a', 1),
+        ('db843078e1fd5f1bbf1c2f550f87548df6fe714ccd12a0ba4a1e25e10fea3ae0', 1),
+        ('eb10fd11319aeee7a21766b85c89580f6c3f509a6afaf743df717ca91d33e0da', 1)
+    ],
+    347027: [
+        ('4fd22d5ca99eaa044288de9f850385cbf758efdc4967a92623138e986ce4316e', 2),
+        ('b88e9beef7559d48d99ea82e71f7c0601981d6972021feb929c04bc7b52368c2', 1),
+        ('ed0f9e07d97ab8a5dc7b8e68ad631a5e78f3cfb6ee6f2aa013854caa64a7b1ae', 1),
+    ],
+    347034: [
+        ('047f5c343dcd15a16c44b3f05fe98bc467002405490ecfb517652207e5425858', 2)
+    ],
+    349122: [
+        ('691695269d8baa441b8e1638a17b3b8497295ec8322c750e8b5312768d4b9ce5', 1),
+        ('f7894d0cab92445bd1bb7681106d8fb18d9b4af2465db8a73efbdb97431f855f', 1),
+    ],
+}
 
 
 async def update_cache() -> None:
