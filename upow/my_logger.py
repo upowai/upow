@@ -16,7 +16,7 @@ class Singleton(type):
 
 class CustomLogger(metaclass=Singleton):
     def __init__(self, module_name: str, log_dir: str = 'logs', log_file: str = 'app.log',
-                 max_bytes: int = 1 * 1024 * 1024,
+                 max_bytes: int = 5 * 1024 * 1024,
                  backup_count: int = 100):
         """
         Initialize the custom logger.
