@@ -243,10 +243,12 @@ async def startup():
 @app.get("/")
 @limiter.limit("3/minute")
 async def root(request: Request):
+    unspent_outputs_hash = await db.get_unspent_outputs_hash()
+    logger.info(f'unspent_outputs_hash: {unspent_outputs_hash}')
     return {
         "ok": True,
         "version": VERSION,
-        "unspent_outputs_hash": await db.get_unspent_outputs_hash(),
+        "unspent_outputs_hash": unspent_outputs_hash,
     }
 
 
@@ -367,7 +369,7 @@ async def verify_and_push_tx(tx: Transaction, request: Request,
             logger.info(f"Transaction has been accepted: {tx_hash}")
             return {"ok": True, "result": "Transaction has been accepted", "tx_hash": tx_hash}
         else:
-            logger.error(error_msg := "Transaction has been accepted")
+            logger.error(error_msg := "Transaction has not been added")
             return {"ok": False, "error": error_msg}
     except UniqueViolationError:
         logger.error(error_msg := "Transaction already present")

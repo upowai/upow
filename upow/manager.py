@@ -718,6 +718,9 @@ async def create_block(
         f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees} "
         f"in {block_duration:.3f} seconds"
     )
+    if block_no % 10 == 0:
+        unspent_outputs_hash = await database.get_unspent_outputs_hash()
+        logger.info(f'unspent_outputs_hash on block no. {block_no}: {unspent_outputs_hash}')
     Manager.difficulty = None
     try:
         inode_power_emission_n_rewards = []
@@ -807,6 +810,11 @@ async def create_block_in_syncing_old(
         f"Added {len(transactions)} transactions in block {block_no}. Reward: {block_reward}, Fees: {fees} "
         f"in {block_duration:.3f} seconds"
     )
+
+    if block_no % 10 == 0:
+        unspent_outputs_hash = await database.get_unspent_outputs_hash()
+        logger.info(f'unspent_outputs_hash on block no. {block_no}: {unspent_outputs_hash}')
+
     Manager.difficulty = None
     return True
 
@@ -831,6 +839,15 @@ double_spend_dict = {
         ('691695269d8baa441b8e1638a17b3b8497295ec8322c750e8b5312768d4b9ce5', 1),
         ('f7894d0cab92445bd1bb7681106d8fb18d9b4af2465db8a73efbdb97431f855f', 1),
     ],
+    395735: [
+        ('461c359b956773ff97af6d2189ae84bcc52740e077224efc80b8b5826b51cb92', 1),
+        ('ef573f3543ef22b087387fd81493cc7bc977adcc1ff4198483a98a67a6d10e6b', 1),
+        ('9efcb290e4c24843bab40dc50591680ac897e52a28db62c7594e4a2b07702291', 1),
+    ],
+    395736: [
+        ('d8421370cef17939c4a2b17c21c7674059c0c24766e80d6129c666f11e886e08', 1),
+        ('af2422540ef2f4570b998b262c242b37f7f0e44fbadabcb0f52684dd0ce1ace5', 1)
+    ]
 }
 
 
