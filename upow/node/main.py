@@ -32,7 +32,9 @@ from upow.manager import (
     calculate_difficulty,
     clear_pending_transactions,
     block_to_bytes,
-    get_circulating_supply, create_block_in_syncing_old, get_inodes_from_cache,
+    get_circulating_supply,
+    create_block_in_syncing_old,
+    get_inodes_from_cache,
 )
 from upow.my_logger import CustomLogger
 from upow.node.ip_manager import IPManager
@@ -124,11 +126,11 @@ async def create_blocks(blocks: list, error_list=None):
         #             break
         assert i == block["id"]
         if not await create_block_in_syncing_old(
-                block_content.hex() if isinstance(block_content, bytes) else block_content,
-                txs,
-                cb_tx,
-                last_block,
-                error_list=error_list
+            block_content.hex() if isinstance(block_content, bytes) else block_content,
+            txs,
+            cb_tx,
+            last_block,
+            error_list=error_list,
         ):
             return False
         last_block = block
@@ -222,7 +224,7 @@ async def sync_blockchain(node_url: str = None):
         sync_status = await _sync_blockchain(node_url)
 
     except Exception as e:
-        logger.error(f'sync_blockchain error: {e}')
+        logger.error(f"sync_blockchain error: {e}")
     finally:
         is_syncing = False
         upow.helpers.is_blockchain_syncing = False
@@ -244,7 +246,7 @@ async def startup():
 @limiter.limit("3/minute")
 async def root(request: Request):
     unspent_outputs_hash = await db.get_unspent_outputs_hash()
-    logger.info(f'unspent_outputs_hash: {unspent_outputs_hash}')
+    logger.info(f"unspent_outputs_hash: {unspent_outputs_hash}")
     return {
         "ok": True,
         "version": VERSION,
@@ -268,7 +270,9 @@ async def middleware(request: Request, call_next):
     client_ip = request.client.host
 
     if not ip_filter.is_ip_allowed(client_ip):
-        return JSONResponse(status_code=403, content={"ok": False, "error": "Access forbidden."})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "error": "Access forbidden."}
+        )
 
     # Normalize the URL path by removing extra slashes
     normalized_path = re.sub("/+", "/", request.scope["path"])
@@ -279,50 +283,62 @@ async def middleware(request: Request, call_next):
         return RedirectResponse(new_url)
 
     if ip_filter.is_endpoint_blocked(normalized_path):
-        return JSONResponse(status_code=403, content={"ok": False, "error": "Access forbidden temporarily."})
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "error": "Access forbidden temporarily."},
+        )
 
     if "Sender-Node" in request.headers:
         NodesManager.add_node(request.headers["Sender-Node"])
 
-    if normalized_path == '/send_to_address' and not (ip_is_local(hostname) or hostname == "localhost"):
+    if normalized_path == "/send_to_address" and not (
+        ip_is_local(hostname) or hostname == "localhost"
+    ):
         return JSONResponse(
             status_code=403,
-            content={"ok": False, "error": "Access forbidden. This endpoint can only be accessed from localhost."},
+            content={
+                "ok": False,
+                "error": "Access forbidden. This endpoint can only be accessed from localhost.",
+            },
         )
 
-    if nodes and not started or (ip_is_local(hostname) or hostname == "localhost"):
+    # Only initialize nodes if this is not a /get_nodes request to prevent recursion
+    if normalized_path != "/get_nodes" and (
+        nodes and not started or (ip_is_local(hostname) or hostname == "localhost")
+    ):
         try:
-            node_url = nodes[0]
-            # requests.get(f'{node_url}/add_node', {'url': })
-            j = await NodesManager.request(f"{node_url}/get_nodes")
-            nodes.extend(j["result"])
-            NodesManager.sync()
+            if not started:
+                node_url = nodes[0]
+                j = await NodesManager.request(f"{node_url}/get_nodes")
+                nodes.extend(j["result"])
+                NodesManager.sync()
+
+                if not (ip_is_local(hostname) or hostname == "localhost"):
+                    started = True
+                    self_url = str(request.base_url).strip("/")
+                    try:
+                        nodes.remove(self_url)
+                    except ValueError:
+                        pass
+                    try:
+                        nodes.remove(self_url.replace("http://", "https://"))
+                    except ValueError:
+                        pass
+
+                    NodesManager.sync()
+
+                    # Propagate this node to others only during initialization
+                    try:
+                        await propagate("add_node", {"url": self_url})
+                        cousin_nodes = await NodeInterface(node_url).get_nodes()
+                        await propagate(
+                            "add_node", {"url": self_url}, nodes=cousin_nodes
+                        )
+                    except:
+                        pass
         except:
             pass
 
-        if not (ip_is_local(hostname) or hostname == "localhost"):
-            started = True
-
-            self_url = str(request.base_url).strip("/")
-            try:
-                nodes.remove(self_url)
-            except ValueError:
-                pass
-            try:
-                nodes.remove(self_url.replace("http://", "https://"))
-            except ValueError:
-                pass
-
-            NodesManager.sync()
-
-            try:
-                await propagate("add_node", {"url": self_url})
-                cousin_nodes = sum(
-                    await NodeInterface(url).get_nodes() for url in nodes
-                )
-                await propagate("add_node", {"url": self_url}, nodes=cousin_nodes)
-            except:
-                pass
     propagate_txs = await db.get_need_propagate_transactions()
     try:
         response = await call_next(request)
@@ -339,7 +355,7 @@ async def middleware(request: Request, call_next):
 @app.exception_handler(Exception)
 async def exception_handler(request: Request, e: Exception):
     logger.error(f"Error on {request.scope['path']}, {type(e).__name__}: {str(e)}")
-    if type(e).__name__ == 'Exception' or type(e).__name__ == 'AssertionError':
+    if type(e).__name__ == "Exception" or type(e).__name__ == "AssertionError":
         return JSONResponse(
             status_code=500,
             content={"ok": False, "error": f"Exception: {str(e)}"},
@@ -354,8 +370,9 @@ async def exception_handler(request: Request, e: Exception):
 transactions_cache = deque(maxlen=100)
 
 
-async def verify_and_push_tx(tx: Transaction, request: Request,
-                             background_tasks: BackgroundTasks):
+async def verify_and_push_tx(
+    tx: Transaction, request: Request, background_tasks: BackgroundTasks
+):
     tx_hash = tx.hash()
     if tx_hash in transactions_cache:
         logger.error(error_msg := "Transaction just added")
@@ -367,7 +384,11 @@ async def verify_and_push_tx(tx: Transaction, request: Request,
             background_tasks.add_task(propagate, "push_tx", {"tx_hex": tx.hex()})
             transactions_cache.append(tx_hash)
             logger.info(f"Transaction has been accepted: {tx_hash}")
-            return {"ok": True, "result": "Transaction has been accepted", "tx_hash": tx_hash}
+            return {
+                "ok": True,
+                "result": "Transaction has been accepted",
+                "tx_hash": tx_hash,
+            }
         else:
             logger.error(error_msg := "Transaction has not been added")
             return {"ok": False, "error": error_msg}
@@ -413,15 +434,15 @@ async def send_to_address(
 
     if not to_address or not amount:
         return JSONResponse(
-            status_code=422,
-            content={"ok": False, "error": f"Missing required params."})
+            status_code=422, content={"ok": False, "error": f"Missing required params."}
+        )
 
     amount = str(amount)
     current_dir = path.dirname(path.abspath(__file__))
-    json_file_path = path.join(current_dir, '..', 'upow_wallet', 'key_pair_list.json')
+    json_file_path = path.join(current_dir, "..", "upow_wallet", "key_pair_list.json")
 
     selected_private_key = None
-    with open(json_file_path, 'r') as json_file:
+    with open(json_file_path, "r") as json_file:
         data = json.load(json_file)
         for key in data.get("keys"):
             if key.get("public_key") == authorization:
@@ -429,9 +450,7 @@ async def send_to_address(
 
     if not selected_private_key:
         return {"ok": False, "error": "Unauthorized"}
-    tx = await create_transaction(
-        selected_private_key, to_address, amount, None
-    )
+    tx = await create_transaction(selected_private_key, to_address, amount, None)
 
     result = await verify_and_push_tx(tx, request, background_tasks)
     return result
@@ -669,9 +688,7 @@ async def get_address_info(
 
     pending_transactions = (
         [
-            await db.get_nice_transaction(
-                tx.hash(), address if verify else None
-            )
+            await db.get_nice_transaction(tx.hash(), address if verify else None)
             for tx in await db.get_address_pending_transactions(address, True)
         ]
         if show_pending
@@ -679,9 +696,7 @@ async def get_address_info(
     )
 
     pending_spent_outputs = (
-        await db.get_address_pending_spent_outputs(address)
-        if show_pending
-        else None
+        await db.get_address_pending_spent_outputs(address) if show_pending else None
     )
 
     stake_output_list = (
@@ -808,10 +823,11 @@ async def get_address_info(
 
 @app.get("/get_address_transactions")
 async def get_address_transactions(
-        request: Request,
-        address: str,
-        page: int = Query(default=1, ge=1),
-        limit: int = Query(default=5, le=20)):
+    request: Request,
+    address: str,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=5, le=20),
+):
     offset = (page - 1) * limit
     transactions = (
         await db.get_address_transactions(
@@ -824,14 +840,14 @@ async def get_address_transactions(
         else []
     )
 
-    return {"ok": True,
-            "result": {
-                "transactions": [
-                    await db.get_nice_transaction(tx.hash())
-                    for tx in transactions
-                ]
-            }
-            }
+    return {
+        "ok": True,
+        "result": {
+            "transactions": [
+                await db.get_nice_transaction(tx.hash()) for tx in transactions
+            ]
+        },
+    }
 
 
 @app.get("/add_node")
@@ -959,8 +975,14 @@ async def get_blocks_details(
 async def dobby_info(request: Request):
     inode_with_vote = await get_inodes_from_cache()
     response_data = [
-        {**item, "emission": f"{item['emission']:.2f}%" if isinstance(item['emission'], Decimal) else str(
-            item['emission']) + "%"}
+        {
+            **item,
+            "emission": (
+                f"{item['emission']:.2f}%"
+                if isinstance(item["emission"], Decimal)
+                else str(item["emission"]) + "%"
+            ),
+        }
         for item in inode_with_vote
     ]
     return {"ok": True, "result": response_data}
@@ -972,8 +994,9 @@ async def get_supply_info(request: Request):
     last_block = await db.get_last_block()
     last_block_id = last_block["id"]
     circulating_supply = get_circulating_supply(last_block_id)
-    supply_info = {"max_supply": MAX_SUPPLY,
-                   "circulating_supply": circulating_supply,
-                   "last_block": last_block
-                   }
+    supply_info = {
+        "max_supply": MAX_SUPPLY,
+        "circulating_supply": circulating_supply,
+        "last_block": last_block,
+    }
     return {"ok": True, "result": supply_info}
