@@ -447,6 +447,7 @@ async def push_block(
     block_no: int = None,
     body=Body(False),
 ):
+    logger.info(f"push_block: {request.client.host}")
     if is_syncing:
         return {"ok": False, "error": "Node is already syncing"}
     if upow.helpers.getting_active_inodes:
