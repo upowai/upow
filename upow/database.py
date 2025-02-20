@@ -1,7 +1,7 @@
 import asyncio
 import os
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from statistics import mean
 from time import perf_counter
 from typing import List, Union, Tuple, Dict, Any
@@ -1228,6 +1228,194 @@ class Database:
         active_inodes = [item for item in inode_with_vote if item["is_active"] is True]
         upow.helpers.getting_active_inodes = False
         return active_inodes
+
+    async def get_active_inodes2(self, check_pending_txs: bool = False):
+        upow.helpers.getting_active_inodes = True
+        registered_inodes = await self.get_all_registered_inode_with_vote2(
+            check_pending_txs
+        )
+
+        if not registered_inodes:
+            return []
+
+        # Calculate total power
+        total_power = sum(Decimal(str(inode["power"])) for inode in registered_inodes)
+        total_power = round_up_decimal(total_power)
+
+        # Calculate emissions and active status
+        active_inodes = []
+        for inode in registered_inodes:
+            power = Decimal(str(inode["power"]))
+            power = round_up_decimal(power)
+            if total_power > 0:
+                emission = (power * Decimal("100")) / total_power
+                emission = emission.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            else:
+                emission = Decimal("0")
+
+            time_difference = datetime.utcnow() - inode["registered_at"]
+            is_active = emission >= 1 or time_difference <= timedelta(hours=48)
+
+            if is_active:
+                active_inodes.append(
+                    {
+                        "wallet": inode["wallet"],
+                        "power": power,
+                        "registered_at": inode["registered_at"],
+                        "emission": emission,
+                        "is_active": True,
+                    }
+                )
+
+        upow.helpers.getting_active_inodes = False
+        return active_inodes
+
+    async def get_all_registered_inode_with_vote2(
+            self, check_pending_txs: bool = False
+    ):
+        # Get all registered inodes first
+        inode_addresses = await self.get_all_registered_inode(check_pending_txs)
+
+        # Prepare the query to get all votes in a single query
+        addresses = []
+        for address, _ in inode_addresses:
+            point = string_to_point(address)
+            for address_format in list(AddressFormat):
+                addresses.append(point_to_string(point, address_format))
+
+        async with self.pool.acquire() as connection:
+            # Get all inode votes in one query
+            if not check_pending_txs:
+                inode_ballot = await connection.fetch(
+                    """SELECT inodes_ballot.address AS inode, 
+                       transactions.outputs_amounts[index + 1] AS vote,
+                       transactions.inputs_addresses[index + 1] AS validator
+                    FROM inodes_ballot 
+                    INNER JOIN transactions ON (transactions.tx_hash = inodes_ballot.tx_hash)
+                    WHERE inodes_ballot.address = ANY($1)""",
+                    addresses,
+                )
+            else:
+                inode_ballot = await connection.fetch(
+                    """SELECT inodes_ballot.address AS inode,
+                       transactions.outputs_amounts[index + 1] AS vote,
+                       transactions.inputs_addresses[index + 1] AS validator
+                    FROM inodes_ballot 
+                    INNER JOIN transactions ON (transactions.tx_hash = inodes_ballot.tx_hash)
+                    WHERE inodes_ballot.address = ANY($1)
+                    AND CONCAT(inodes_ballot.tx_hash, inodes_ballot.index) != ALL (
+                        SELECT CONCAT(pending_spent_outputs.tx_hash, pending_spent_outputs.index) 
+                        FROM pending_spent_outputs)""",
+                    addresses,
+                )
+
+            # Get unique validators
+            validators = list(set(vote["validator"] for vote in inode_ballot))
+
+            # Get all validator ballots in one query
+            validator_stakes = {}
+            if validators:
+                for validator in validators:
+                    # Get validator's ballot
+                    if not check_pending_txs:
+                        validator_ballots = await connection.fetch(
+                            """SELECT validators_ballot.address AS validator,
+                               transactions.outputs_amounts[index + 1] AS vote,
+                               transactions.inputs_addresses[index + 1] AS delegate
+                            FROM validators_ballot
+                            INNER JOIN transactions ON (transactions.tx_hash = validators_ballot.tx_hash)
+                            WHERE validators_ballot.address = $1""",
+                            validator,
+                        )
+                    else:
+                        validator_ballots = await connection.fetch(
+                            """SELECT validators_ballot.address AS validator,
+                               transactions.outputs_amounts[index + 1] AS vote,
+                               transactions.inputs_addresses[index + 1] AS delegate
+                            FROM validators_ballot
+                            INNER JOIN transactions ON (transactions.tx_hash = validators_ballot.tx_hash)
+                            WHERE validators_ballot.address = $1
+                            AND CONCAT(validators_ballot.tx_hash, validators_ballot.index) != ALL (
+                                SELECT CONCAT(pending_spent_outputs.tx_hash, pending_spent_outputs.index)
+                                FROM pending_spent_outputs)""",
+                            validator,
+                        )
+
+                    # Get unique delegates
+                    delegates = list(
+                        set(ballot["delegate"] for ballot in validator_ballots)
+                    )
+
+                    # Get all delegate stakes in one query
+                    delegate_stakes = {}
+                    if delegates:
+                        if not check_pending_txs:
+                            delegate_stakes_result = await connection.fetch(
+                                """SELECT address, SUM(transactions.outputs_amounts[index + 1]) as total_stake
+                                FROM unspent_outputs 
+                                INNER JOIN transactions ON (transactions.tx_hash = unspent_outputs.tx_hash)
+                                WHERE address = ANY($1) AND (unspent_outputs.is_stake = TRUE)
+                                GROUP BY address""",
+                                delegates,
+                            )
+                        else:
+                            delegate_stakes_result = await connection.fetch(
+                                """SELECT address, SUM(transactions.outputs_amounts[index + 1]) as total_stake
+                                FROM unspent_outputs 
+                                INNER JOIN transactions ON (transactions.tx_hash = unspent_outputs.tx_hash)
+                                WHERE address = ANY($1) AND (unspent_outputs.is_stake = TRUE)
+                                AND CONCAT(unspent_outputs.tx_hash, unspent_outputs.index) != ALL (
+                                    SELECT CONCAT(pending_spent_outputs.tx_hash, pending_spent_outputs.index)
+                                    FROM pending_spent_outputs)
+                                GROUP BY address""",
+                                delegates,
+                            )
+
+                        # Create delegate stakes lookup with exact decimal precision
+                        for stake in delegate_stakes_result:
+                            stake_amount = Decimal(str(stake["total_stake"])) / SMALLEST
+                            delegate_stakes[stake["address"]] = round_up_decimal(
+                                stake_amount
+                            )
+
+                    # Calculate validator stake with exact decimal precision
+                    validator_stake = Decimal("0")
+                    for ballot in validator_ballots:
+                        vote_amount = Decimal(str(ballot["vote"])) / SMALLEST
+                        delegate = ballot["delegate"]
+                        delegate_stake = delegate_stakes.get(delegate, Decimal("0"))
+                        # Calculate vote stake exactly as in original
+                        vote_stake = (vote_amount * delegate_stake) / Decimal("10")
+                        validator_stake += round_up_decimal(vote_stake)
+
+                    validator_stakes[validator] = validator_stake
+
+            # Process votes and calculate power in memory
+            inode_votes = {}
+            for vote in inode_ballot:
+                inode_address = vote["inode"]
+                vote_amount = Decimal(str(vote["vote"])) / SMALLEST
+                validator = vote["validator"]
+                validator_stake = validator_stakes.get(validator, Decimal("0"))
+
+                # Calculate vote power exactly as in original
+                vote_power = (vote_amount * validator_stake) / Decimal("10")
+                vote_power = round_up_decimal(vote_power)
+                if inode_address not in inode_votes:
+                    inode_votes[inode_address] = Decimal("0")
+                inode_votes[inode_address] += vote_power
+
+            # Create final result with exact decimal precision
+            result_list = []
+            for address, timestamp in inode_addresses:
+                power = inode_votes.get(address, Decimal("0"))
+                # Round power here to match original
+                power = round_up_decimal(power)
+                result_list.append(
+                    {"wallet": address, "power": power, "registered_at": timestamp}
+                )
+
+            return result_list
 
     async def get_inode_vote_ratio_by_address(self, address: str, check_pending_txs: bool = False):
         async with self.pool.acquire() as connection:
