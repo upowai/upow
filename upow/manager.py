@@ -457,12 +457,6 @@ async def check_block(
         logger.error(error)
         return False
 
-    five_minutes_ago = current_timestamp - 5 * 60  # 5 minutes ago in seconds
-    if content_time < five_minutes_ago:
-        error_list.append(error := "block older than 5 minutes")
-        logger.error(error)
-        return False
-
     database: Database = Database.instance
     transactions = [tx for tx in transactions if isinstance(tx, Transaction)]
     if get_transactions_size(transactions) > MAX_BLOCK_SIZE_HEX:
