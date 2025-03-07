@@ -265,7 +265,7 @@ async def middleware(request: Request, call_next):
     global started, self_url
     nodes = NodesManager.get_recent_nodes()
     hostname = request.base_url.hostname
-    client_ip = request.client.host
+    client_ip = await get_ip_address_from_header(request)
 
     if not ip_filter.is_ip_allowed(client_ip):
         return JSONResponse(status_code=403, content={"ok": False, "error": "Access forbidden."})
@@ -335,6 +335,23 @@ async def middleware(request: Request, call_next):
     except Exception as e:
         raise
 
+async def get_ip_address_from_header(request: Request):
+    x_forwarded_for = request.headers.get('x-forwarded-for', '')
+    if x_forwarded_for:
+        # The first IP address in the 'x-forwarded-for' header is typically the client's IP
+        visitor_ip = x_forwarded_for.split(',')[0].strip()
+    else:
+        # If 'x-forwarded-for' is not available, use 'x-real-ip' or the client address directly
+        visitor_ip = request.headers.get('x-real-ip', None)
+    
+     # Fallback to request.client.host if headers don't contain IP
+    if not visitor_ip and request.client:
+        visitor_ip = request.client.host
+
+    if not visitor_ip:
+        logger.info(f"not visitor_ip: request.headers: {request.headers}")
+    return visitor_ip
+
 
 @app.exception_handler(Exception)
 async def exception_handler(request: Request, e: Exception):
@@ -389,7 +406,8 @@ async def push_tx(
         return {"ok": False, "error": error}
     if body and tx_hex is None:
         tx_hex = body["tx_hex"]
-    logger.info(f"IP: {request.client.host} tx_hex: {tx_hex}")
+    client_ip = await get_ip_address_from_header(request)
+    logger.info(f"IP: {client_ip} tx_hex: {tx_hex}")
     tx = await Transaction.from_hex(tx_hex)
     result = await verify_and_push_tx(tx, request, background_tasks)
     return result
@@ -447,7 +465,8 @@ async def push_block(
     block_no: int = None,
     body=Body(False),
 ):
-    logger.info(f"push_block: {request.client.host}")
+    client_ip = await get_ip_address_from_header(request)
+    logger.info(f"push_block client_ip: {client_ip}")
     if is_syncing:
         return {"ok": False, "error": "Node is already syncing"}
     if upow.helpers.getting_active_inodes:
@@ -611,13 +630,12 @@ async def get_validators_info(
     result_list = list(result_dict.values())
     return result_list
 
-
 @app.get("/get_delegates_info")
 async def get_delegates_info(
-    background_tasks: BackgroundTasks,
-    validator: str = None,
-    offset: int = 0,
-    limit: int = Query(default=100, le=1000),
+        background_tasks: BackgroundTasks,
+        validator: str = None,
+        offset: int = 0,
+        limit: int = Query(default=100, le=1000),
 ):
     if validator:
         validator_ballot = await db.get_validator_ballot_by_address(
@@ -626,7 +644,16 @@ async def get_delegates_info(
     else:
         validator_ballot = await db.get_validator_ballot(offset, limit)
 
-    result_dict = defaultdict(lambda: {"delegate": "", "vote": []})
+    # Group delegates to fetch stakes in batch
+    delegates_set = {delegate for _, _, _, delegate, _ in validator_ballot}
+
+    # Fetch all stakes in a single batch query
+    delegate_stakes = await db.get_multiple_address_stakes(
+        delegates_set, check_pending_txs=True
+    )
+
+    # Build result without repetitive stake queries
+    result_dict = defaultdict(lambda: {"delegate": "", "vote": [], "totalStake": Decimal(0)})
 
     for tx_hash, validator_address, votes, delegate, index in validator_ballot:
         result_dict[delegate]["delegate"] = delegate
@@ -638,13 +665,10 @@ async def get_delegates_info(
                 "index": index,
             }
         )
-        result_dict[delegate]["totalStake"] = await db.get_address_stake(
-            delegate, check_pending_txs=True
-        )
+        result_dict[delegate]["totalStake"] = delegate_stakes.get(delegate, Decimal(0))
 
-    result_list = list(result_dict.values())
+    return list(result_dict.values())
 
-    return result_list
 
 
 @app.get("/get_address_info")
