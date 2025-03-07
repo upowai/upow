@@ -1,10 +1,11 @@
 import asyncio
 import os
+from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
 from statistics import mean
 from time import perf_counter
-from typing import List, Union, Tuple, Dict, Any
+from typing import List, Union, Tuple, Dict, Any, Set
 
 import asyncpg
 import pickledb
@@ -1131,6 +1132,92 @@ class Database:
                     if tx_output.address in addresses and tx_output.is_stake is True:
                         stake += tx_output.amount
         return stake
+
+    
+    async def get_multiple_address_stakes(
+        self, addresses: Set[str], check_pending_txs: bool = False
+        ) -> Dict[str, Decimal]:
+        """Batch process multiple address stakes in a single database query."""
+        if not addresses:
+            return {}
+
+        # Prepare all points and searches in advance
+        address_data = {
+            addr: {
+                'point': string_to_point(addr),
+                'formats': [point_to_string(string_to_point(addr), fmt)
+                            for fmt in list(AddressFormat)],
+                'searches': ['%' + point_to_bytes(string_to_point(addr), fmt).hex() + '%'
+                             for fmt in list(AddressFormat)]
+            } for addr in addresses
+        }
+
+        # Flatten address formats for SQL query
+        all_address_formats = [fmt
+                               for addr_data in address_data.values()
+                               for fmt in addr_data['formats']]
+
+        async with self.pool.acquire() as connection:
+            # Single query to get all unspent outputs
+            if await connection.fetchrow(
+                    'SELECT tx_hash, index FROM unspent_outputs WHERE address IS NULL'):
+                await self.set_unspent_outputs_addresses()
+
+            query = '''
+                SELECT address, SUM(transactions.outputs_amounts[index + 1]) as total_amount 
+                FROM unspent_outputs 
+                INNER JOIN transactions ON (transactions.tx_hash = unspent_outputs.tx_hash)
+                WHERE address = ANY($1) 
+                AND unspent_outputs.is_stake = TRUE
+            '''
+
+            if check_pending_txs:
+                query += '''
+                    AND CONCAT(unspent_outputs.tx_hash, unspent_outputs.index) != ALL (
+                        SELECT CONCAT(pending_spent_outputs.tx_hash, pending_spent_outputs.index) 
+                        FROM pending_spent_outputs
+                    )
+                '''
+
+            query += ' GROUP BY address'
+
+            # Execute single aggregated query
+            results = await connection.fetch(query, all_address_formats, timeout=60)
+
+            # Process results into a mapping
+            stake_map = defaultdict(Decimal)
+            for row in results:
+                address = row['address']
+                amount = Decimal(row['total_amount']) / SMALLEST
+                # Find original address from formatted address
+                original_addr = next(
+                    addr for addr, data in address_data.items()
+                    if address in data['formats']
+                )
+                stake_map[original_addr] += amount
+
+            # Handle pending transactions if needed
+            if check_pending_txs:
+                all_searches = [search
+                                for addr_data in address_data.values()
+                                for search in addr_data['searches']]
+
+                pending_txs = await connection.fetch(
+                    'SELECT tx_hex FROM pending_transactions WHERE tx_hex LIKE ANY($1)',
+                    all_searches
+                )
+
+                for tx_row in pending_txs:
+                    tx = await Transaction.from_hex(tx_row['tx_hex'], check_signatures=False)
+                    for i, tx_output in enumerate(tx.outputs):
+                        if tx_output.is_stake:
+                            # Find original address from output address
+                            for original_addr, data in address_data.items():
+                                if tx_output.address in data['formats']:
+                                    stake_map[original_addr] += tx_output.amount
+
+            return dict(stake_map)
+
 
     async def get_stake_outputs(self, address: str, check_pending_txs: bool = False) -> List[TransactionInput]:
         point = string_to_point(address)
