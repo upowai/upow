@@ -91,20 +91,33 @@ async def calculate_difficulty() -> Tuple[Decimal, dict]:
         return START_DIFFICULTY, last_block
 
     if last_block["id"] % BLOCKS_COUNT == 0:
+        logger.info(f'calculate_difficulty for {last_block["id"]}')
         last_adjust_block = await database.get_block_by_id(
             last_block["id"] - BLOCKS_COUNT + 1
         )
+        logger.info(f'calculate_difficulty last_adjust_block {last_adjust_block["id"]}')
         elapsed = last_block["timestamp"] - last_adjust_block["timestamp"]
+        logger.info(f'calculate_difficulty elapsed {elapsed}')
         average_per_block = elapsed / BLOCKS_COUNT
+        logger.info(f'calculate_difficulty average_per_block {average_per_block}')
         last_difficulty = last_block["difficulty"]
+        logger.info(f'calculate_difficulty last_difficulty {last_difficulty}')
         hashrate = difficulty_to_hashrate(last_difficulty)
+        logger.info(f'calculate_difficulty difficulty_to_hashrate {hashrate}')
         ratio = BLOCK_TIME / average_per_block
+        logger.info(f'calculate_difficulty ratio {ratio}')
         if last_block["id"] >= 180_000:  # from block 180k, allow difficulty to double at most
             ratio = min(ratio, 2)
         hashrate *= ratio
+        logger.info(f'calculate_difficulty hashrate *= ratio {hashrate}')
         new_difficulty = hashrate_to_difficulty(hashrate)
+        if new_difficulty < START_DIFFICULTY and last_block["id"] >= 590600:
+            logger.info(f'new_difficulty < START_DIFFICULTY: new_difficulty {START_DIFFICULTY}')
+            return START_DIFFICULTY, last_block
+        logger.info(f'calculate_difficulty hashrate_to_difficulty block {last_block["id"]}, new_difficulty {new_difficulty}')
         return new_difficulty, last_block
 
+    # logger.info(f'calculate_difficulty for {last_block["id"]}, difficulty: {last_block["difficulty"]}')
     return last_block["difficulty"], last_block
 
 
@@ -438,8 +451,9 @@ async def check_block(
         logger.error(error)
         return False
 
-    if content_time > timestamp():
-        error_list.append(error := "timestamp in the future")
+    current_timestamp = timestamp()
+    if content_time > current_timestamp:
+        error_list.append(error := f"timestamp in the future content_time: {content_time}, current_timestamp {current_timestamp}")
         logger.error(error)
         return False
 
