@@ -125,7 +125,7 @@ async def create_blocks(blocks: list, error_list=None):
         #         block_content = block_to_bytes(last_block['hash'], block)
         #         if sha256(block_content) == block['hash']:
         #             break
-        assert i == block["id"]
+        assert i == block["id"], f"Expected block ID {i}, got {block['id']}."
         if not await create_block_in_syncing_old(
                 block_content.hex() if isinstance(block_content, bytes) else block_content,
                 txs,
