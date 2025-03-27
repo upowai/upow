@@ -35,7 +35,7 @@ from upow.manager import (
     get_circulating_supply, create_block_in_syncing_old, get_inodes_from_cache,
 )
 from upow.my_logger import CustomLogger
-from upow.node.ip_manager import IPManager
+from upow.node.access_control_manager import AccessControlManager
 from upow.node.nodes_manager import NodesManager, NodeInterface
 from upow.node.utils import ip_is_local
 from upow.upow_transactions import Transaction, CoinbaseTransaction
@@ -50,7 +50,7 @@ NodesManager.init()
 started = False
 is_syncing = False
 self_url = None
-ip_filter = IPManager()
+access_control_manager = AccessControlManager()
 
 print = ic
 logger = CustomLogger(__name__).get_logger()
@@ -92,6 +92,9 @@ async def create_blocks(blocks: list, error_list=None):
     )
     i = last_block["id"] + 1
     for block_info in blocks:
+        if access_control_manager.to_stop_sync():
+            error_list.append('Syncing was halted by the access control manager due to a stop condition.')
+            return False
         block = block_info["block"]
         txs_hex = block_info["transactions"]
         txs = [await Transaction.from_hex(tx) for tx in txs_hex]
@@ -202,7 +205,8 @@ async def _sync_blockchain(node_url: str = None):
                             node_url,
                         )
                 return True
-            assert await create_blocks(blocks, error_list=error)
+            assert await create_blocks(blocks, error_list=error), (f"create_blocks failed to create blocks."
+                                                                   f" Error details: {error}")
         except Exception as e:
             logger.error(error[0] if error else e)
 
@@ -222,7 +226,8 @@ async def sync_blockchain(node_url: str = None):
         sync_status = await _sync_blockchain(node_url)
 
     except Exception as e:
-        logger.error(f'sync_blockchain error: {e}')
+        logger.error(f"sync_blockchain error: {repr(e)}")
+        sync_status = repr(e)
     finally:
         is_syncing = False
         upow.helpers.is_blockchain_syncing = False
@@ -267,7 +272,7 @@ async def middleware(request: Request, call_next):
     hostname = request.base_url.hostname
     client_ip = request.client.host
 
-    if not ip_filter.is_ip_allowed(client_ip):
+    if not access_control_manager.is_ip_allowed(client_ip):
         return JSONResponse(status_code=403, content={"ok": False, "error": "Access forbidden."})
 
     # Normalize the URL path by removing extra slashes
@@ -278,7 +283,7 @@ async def middleware(request: Request, call_next):
         # Redirect to normalized URL
         return RedirectResponse(new_url)
 
-    if ip_filter.is_endpoint_blocked(normalized_path):
+    if access_control_manager.is_endpoint_blocked(normalized_path):
         return JSONResponse(status_code=403, content={"ok": False, "error": "Access forbidden temporarily."})
 
     if "Sender-Node" in request.headers:
@@ -846,7 +851,8 @@ async def add_node(request: Request, url: str, background_tasks: BackgroundTasks
         return {"ok": False, "error": "Node already present"}
     else:
         try:
-            assert await NodesManager.is_node_working(url)
+            assert await NodesManager.is_node_working(url), (f"Node at {url} is not working."
+                                                             f" Please check the node's status.")
             background_tasks.add_task(propagate, "add_node", {"url": url}, url)
             NodesManager.add_node(url)
             return {"ok": True, "result": "Node added"}

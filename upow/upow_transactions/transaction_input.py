@@ -31,14 +31,16 @@ class TransactionInput:
         if self.transaction is None:
             from upow.database import Database
             self.transaction = await Database.instance.get_transaction(self.tx_hash, check_signatures=False)
-            assert self.transaction is not None
+            assert self.transaction is not None, ("Expected a valid transaction, but found None. "
+                                                  "Check if the transaction was properly initialized.")
         return self.transaction
 
     async def get_transaction_info(self):
         if self.transaction_info is None:
             from upow.database import Database
             self.transaction_info = await Database.instance.get_transaction_info(self.tx_hash)
-        assert self.transaction_info is not None
+        assert self.transaction_info is not None, ("Expected valid transaction information, but found None. "
+                                                   "Please ensure transaction_info is initialized correctly.")
         return self.transaction_info
 
     async def get_related_output(self):

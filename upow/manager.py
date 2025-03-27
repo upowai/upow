@@ -152,7 +152,7 @@ async def check_block_is_valid(block_content: str, mining_info: tuple = None) ->
 
 
 def get_block_reward(block_no):
-    assert block_no > 0
+    assert block_no > 0, f"Block number {block_no} must be greater than 0."
     halving_interval = 1576800  # 3 years in minutes
 
     nine_halving_interval = 14191200
@@ -403,9 +403,9 @@ def split_block_content(block_content: str):
         version = 1
     else:
         version = int.from_bytes(stream.read(1), ENDIAN)
-        assert version > 1
+        assert version > 1, f"Version {version} must be greater than 1."
         if version == 2:
-            assert len(_bytes) == 108
+            assert len(_bytes) == 108, f"Expected length 108, got {len(_bytes)}."
         else:
             raise NotImplementedError()
     previous_hash = stream.read(32).hex()
