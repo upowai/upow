@@ -275,8 +275,11 @@ async def clear_pending_transactions(transactions=None):
             (tx_input.tx_hash, tx_input.index) for tx_input in transaction.inputs
         ]
         if any(used_input in tx_inputs for used_input in used_inputs):
+            # Remove associated UTXOs using the updated remove_pending_spent_outputs
+            await database.remove_pending_spent_outputs_by_tuple(tx_inputs)
+            # Remove the pending transaction
             await database.remove_pending_transaction(tx_hash)
-            print(f"removed {tx_hash}")
+            logger.info(f"clear_pending_transactions: removed {tx_hash}")
             return await clear_pending_transactions()
         used_inputs += tx_inputs
         if transaction.transaction_type == TransactionType.INODE_DE_REGISTRATION:
@@ -323,13 +326,8 @@ async def clear_pending_transactions(transactions=None):
             validator_ballot_inputs
         )
         await verify_outputs(validator_ballot_inputs, validator_ballot_outputs)
-    # unspent_outputs = await database.get_unspent_outputs(used_inputs)
-    # double_spend_inputs = set(used_inputs) - set(unspent_outputs)
-    # if double_spend_inputs == set(used_inputs):
-    #     await database.remove_pending_transactions()
-    # elif double_spend_inputs:
-    #     await database.remove_pending_transactions_by_contains(
-    #         [tx_input[0] + bytes([tx_input[1]]).hex() for tx_input in double_spend_inputs])
+        return None
+    return None
 
 
 async def verify_outputs(used_inputs, outputs):
@@ -339,12 +337,16 @@ async def verify_outputs(used_inputs, outputs):
     if double_spend_inputs == set(used_inputs):
         await database.remove_pending_transactions()
     elif double_spend_inputs:
+        # Remove associated UTXOs from pending_spent_outputs using the updated function
+        await database.remove_pending_spent_outputs_by_tuple(list(double_spend_inputs))
+        # Remove transactions by contains
         await database.remove_pending_transactions_by_contains(
             [
                 tx_input[0] + bytes([tx_input[1]]).hex()
                 for tx_input in double_spend_inputs
             ]
         )
+        logger.info(f"verify_outputs: removed {used_inputs}")
 
 
 def get_transactions_merkle_tree_ordered(transactions: List[Union[Transaction, str]]):

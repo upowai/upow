@@ -120,7 +120,16 @@ class Database:
 
     async def remove_pending_transactions(self):
         async with self.pool.acquire() as connection:
-            await connection.execute('DELETE FROM pending_transactions')
+            deleted_transactions = await connection.fetch(
+                'DELETE FROM pending_transactions RETURNING *'
+            )
+            await connection.execute('DELETE FROM pending_spent_outputs')
+            if deleted_transactions:
+                deleted_tx_hashes = [record['tx_hash'] for record in deleted_transactions]
+                logger.info(
+                    f"remove_pending_transactions: removed {len(deleted_tx_hashes)} transactions: {deleted_tx_hashes}")
+            else:
+                logger.info("remove_pending_transactions: no transactions to remove")
 
     async def delete_blockchain(self):
         async with self.pool.acquire() as connection:
@@ -320,8 +329,22 @@ class Database:
 
     async def remove_pending_transactions_by_contains(self, search: List[str]) -> None:
         async with self.pool.acquire() as connection:
-            await connection.execute('DELETE FROM pending_transactions WHERE tx_hex LIKE ANY($1)',
-                                     [f"%{c}%" for c in search])
+            async with connection.transaction():
+                deleted_transactions = await connection.fetch(
+                    'DELETE FROM pending_transactions WHERE tx_hex LIKE ANY($1) RETURNING *',
+                    [f"%{c}%" for c in search]
+                )
+
+                if deleted_transactions:
+                    deleted_tx_hashes = [record['tx_hash'] for record in deleted_transactions]
+                    logger.info(
+                        f"remove_pending_transactions_by_contains: removed {len(deleted_tx_hashes)} transactions "
+                        f"deleted_tx_hashes: {deleted_tx_hashes}"
+                    )
+                else:
+                    logger.info(
+                        f"remove_pending_transactions_by_contains: no transactions matched patterns {search}"
+                    )
 
     async def get_pending_transaction_by_contains_multi(self, contains: List[str], ignore: str = None):
         async with self.pool.acquire() as connection:
@@ -710,6 +733,11 @@ class Database:
         inputs = sum(
             [[(tx_input.tx_hash, tx_input.index) for tx_input in transaction.inputs] for transaction in transactions],
             [])
+        async with self.pool.acquire() as connection:
+            await connection.execute('DELETE FROM pending_spent_outputs WHERE (tx_hash, index) = ANY($1::tx_output[])',
+                                     inputs)
+
+    async def remove_pending_spent_outputs_by_tuple(self, inputs: List[Tuple[str, int]]) -> None:
         async with self.pool.acquire() as connection:
             await connection.execute('DELETE FROM pending_spent_outputs WHERE (tx_hash, index) = ANY($1::tx_output[])',
                                      inputs)
