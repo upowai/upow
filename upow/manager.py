@@ -346,7 +346,7 @@ async def verify_outputs(used_inputs, outputs):
                 for tx_input in double_spend_inputs
             ]
         )
-        logger.info(f"verify_outputs: removed {used_inputs}")
+        logger.info(f"clear_pending_transactions verify_outputs: removed {double_spend_inputs}")
 
 
 def get_transactions_merkle_tree_ordered(transactions: List[Union[Transaction, str]]):
