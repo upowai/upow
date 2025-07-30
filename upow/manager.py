@@ -670,7 +670,7 @@ async def create_block(
     )
 
     active_inodes = await database.get_active_inodes()
-    update_active_inodes_cache_with_data(active_inodes)
+    await update_active_inodes_cache_with_data(active_inodes)
 
     block_reward = get_block_reward(block_no)
     miner_reward, inode_rewards = get_inode_rewards(block_reward, active_inodes, block_no=block_no)

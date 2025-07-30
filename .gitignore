@@ -12,3 +12,6 @@ postgres/
 upow/upow_wallet/key_pair_list.json
 upow/upow_wallet/upow_wallet.json
 upow/node/nodes.json
+upow/emission_details.json
+upow/node/ip_config.json
+logs

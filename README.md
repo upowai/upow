@@ -54,7 +54,7 @@ This script installs additional required packages, creates the uPow database and
 git clone https://github.com/upowai/upow.git
 cd upow
 pip install -r requirements.txt
-uvicorn upow.node.main:app --port 3006
+uvicorn upow.node.main:app --host 0.0.0.0 --port 3006
 ```
 
 Node should now sync the blockchain and start working

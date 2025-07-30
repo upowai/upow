@@ -19,6 +19,15 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+# WebSocket imports
+from websocket.socket_endpoint import (
+    websocket_router,
+    start_websocket_manager,
+    shutdown_websocket_manager,
+    broadcast_new_block,
+    broadcast_new_transaction,
+)
+
 import upow.helpers
 from upow.constants import VERSION, ENDIAN, MAX_SUPPLY
 from upow.database import Database
@@ -32,7 +41,9 @@ from upow.manager import (
     calculate_difficulty,
     clear_pending_transactions,
     block_to_bytes,
-    get_circulating_supply, create_block_in_syncing_old, get_inodes_from_cache,
+    get_circulating_supply,
+    create_block_in_syncing_old,
+    get_inodes_from_cache,
 )
 from upow.my_logger import CustomLogger
 from upow.node.ip_manager import IPManager
@@ -60,6 +71,9 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# Include WebSocket router
+app.include_router(websocket_router)
 
 
 async def propagate(path: str, args: dict, ignore_url=None, nodes: list = None):
@@ -239,6 +253,15 @@ async def startup():
         host=environ.get("UPOW_DATABASE_HOST", None),
     )
 
+    # Start WebSocket manager background tasks
+    await start_websocket_manager()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    # Shutdown WebSocket manager
+    await shutdown_websocket_manager()
+
 
 @app.get("/")
 @limiter.limit("3/minute")
@@ -368,6 +391,12 @@ async def exception_handler(request: Request, e: Exception):
     )
 
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Shutdown WebSocket manager
+    await shutdown_websocket_manager()
+
+
 transactions_cache = deque(maxlen=100)
 
 
@@ -382,9 +411,24 @@ async def verify_and_push_tx(tx: Transaction, request: Request,
             if "Sender-Node" in request.headers:
                 NodesManager.update_last_message(request.headers["Sender-Node"])
             background_tasks.add_task(propagate, "push_tx", {"tx_hex": tx.hex()})
+
+            # Broadcast new transaction to WebSocket subscribers
+            tx_data = {
+                "tx_hash": tx_hash,
+                "from": tx.inputs[0].address if tx.inputs else None,
+                "to": [output.address for output in tx.outputs],
+                "amount": sum(output.amount for output in tx.outputs),
+                "fees": tx.fees,
+            }
+            background_tasks.add_task(broadcast_new_transaction, tx_data)
+
             transactions_cache.append(tx_hash)
             logger.info(f"Transaction has been accepted: {tx_hash}")
-            return {"ok": True, "result": "Transaction has been accepted", "tx_hash": tx_hash}
+            return {
+                "ok": True,
+                "result": "Transaction has been accepted",
+                "tx_hash": tx_hash,
+            }
         else:
             logger.error(error_msg := "Transaction has not been added")
             return {"ok": False, "error": error_msg}
@@ -538,6 +582,37 @@ async def push_block(
     error_list = []
     if not await create_block(block_content, final_transactions, error_list=error_list):
         return {"ok": False, "error": error_list[0]} if error_list else {"ok": False}
+
+    # Broadcast new block to WebSocket subscribers
+    block_hash = sha256(
+        block_content
+        if isinstance(block_content, bytes)
+        else bytes.fromhex(block_content)
+    )
+    # Prepare block data with the same format as get_mining_info
+    Manager.difficulty = None
+    difficulty, last_block = await get_difficulty()
+    pending_transactions = await db.get_pending_transactions_limit(hex_only=True)
+    pending_transactions = sorted(pending_transactions)
+    if LAST_PENDING_TRANSACTIONS_CLEAN[0] < timestamp() - 600:
+        print(LAST_PENDING_TRANSACTIONS_CLEAN[0])
+        LAST_PENDING_TRANSACTIONS_CLEAN[0] = timestamp()
+        background_tasks.add_task(clear_pending_transactions, pending_transactions)
+
+    # Create block data with the same format as get_mining_info result
+    block_data = {
+        "block_no": block_no,
+        "block_hash": block_hash,
+        "transactions_count": len(final_transactions),
+        "timestamp": timestamp(),
+        "difficulty": difficulty,
+        "last_block": last_block,
+        "pending_transactions": pending_transactions[:10],
+        "pending_transactions_hashes": [sha256(tx) for tx in pending_transactions],
+        "merkle_root": get_transactions_merkle_tree(pending_transactions[:10]),
+    }
+    print(block_data)
+    background_tasks.add_task(broadcast_new_block, block_data)
 
     if "Sender-Node" in request.headers:
         NodesManager.update_last_message(request.headers["Sender-Node"])
