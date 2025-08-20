@@ -3,6 +3,7 @@ import os
 from json import JSONDecodeError
 from os.path import dirname, exists
 from random import sample
+from filelock import FileLock
 
 import httpx
 import pickledb
@@ -25,15 +26,21 @@ INACTIVE_NODES_DELTA = 60 * 60 * 24 * 90  # 3 months
 MAX_NODES_COUNT = 100
 
 path = dirname(os.path.realpath(__file__)) + "/nodes.json"
+lock_path = path + ".lock"
+file_lock = FileLock(lock_path, timeout=10)  # 10 second timeout
+
 if not exists(path):
-    json.dump({}, open(path, "wt"))
+    with file_lock:
+        if not exists(path):  # Double-check after acquiring lock
+            json.dump({}, open(path, "wt"))
 else:
-    with open(path, "rt") as file:
+    with file_lock, open(path, "rt") as file:
         data = file.read()
         if not data.strip():
             # If the file is empty, initialize the database with an empty dictionary
             json.dump({}, open(path, "wt"))
-db = pickledb.load(path, True)
+
+db = pickledb.load(path, False)  # Disable auto-dump
 
 
 class NodesManager:
@@ -47,24 +54,26 @@ class NodesManager:
     @staticmethod
     def init():
         core_url = CORE_URL.rstrip("/")
-        try:
-            NodesManager.db._loaddb()
-        except JSONDecodeError as e:
-            print(e)
-            with open(path, 'wt') as f:
-                json.dump({}, f)
-            NodesManager.db._loaddb()
+        with file_lock:
+            try:
+                NodesManager.db._loaddb()
+            except JSONDecodeError as e:
+                print(e)
+                with open(path, "wt") as f:
+                    json.dump({}, f)
+                NodesManager.db._loaddb()
 
-        NodesManager.nodes = NodesManager.db.get("nodes") or [core_url]
-        # print("Loaded nodes:", NodesManager.nodes)
-        NodesManager.last_messages = NodesManager.db.get("last_messages") or {
-            core_url: timestamp()
-        }
+            NodesManager.nodes = NodesManager.db.get("nodes") or [core_url]
+            NodesManager.last_messages = NodesManager.db.get("last_messages") or {
+                core_url: timestamp()
+            }
 
     @staticmethod
     def sync():
-        NodesManager.db.set("nodes", NodesManager.nodes)
-        NodesManager.db.set("last_messages", NodesManager.last_messages)
+        with file_lock:
+            NodesManager.db.set("nodes", NodesManager.nodes)
+            NodesManager.db.set("last_messages", NodesManager.last_messages)
+            NodesManager.db.dump()
 
     @staticmethod
     async def request(url: str, method: str = "GET", **kwargs):
