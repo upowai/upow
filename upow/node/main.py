@@ -366,7 +366,7 @@ async def get_ip_address_from_header(request: Request):
     else:
         # If 'x-forwarded-for' is not available, use 'x-real-ip' or the client address directly
         visitor_ip = request.headers.get('x-real-ip', None)
-    
+
      # Fallback to request.client.host if headers don't contain IP
     if not visitor_ip and request.client:
         visitor_ip = request.client.host
