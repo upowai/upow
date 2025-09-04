@@ -120,7 +120,16 @@ class Database:
 
     async def remove_pending_transactions(self):
         async with self.pool.acquire() as connection:
-            await connection.execute('DELETE FROM pending_transactions')
+            deleted_transactions = await connection.fetch(
+                'DELETE FROM pending_transactions RETURNING *'
+            )
+            await connection.execute('DELETE FROM pending_spent_outputs')
+            if deleted_transactions:
+                deleted_tx_hashes = [record['tx_hash'] for record in deleted_transactions]
+                logger.info(
+                    f"remove_pending_transactions: removed {len(deleted_tx_hashes)} transactions: {deleted_tx_hashes}")
+            else:
+                logger.info("remove_pending_transactions: no transactions to remove")
 
     async def delete_blockchain(self):
         async with self.pool.acquire() as connection:
@@ -320,8 +329,22 @@ class Database:
 
     async def remove_pending_transactions_by_contains(self, search: List[str]) -> None:
         async with self.pool.acquire() as connection:
-            await connection.execute('DELETE FROM pending_transactions WHERE tx_hex LIKE ANY($1)',
-                                     [f"%{c}%" for c in search])
+            async with connection.transaction():
+                deleted_transactions = await connection.fetch(
+                    'DELETE FROM pending_transactions WHERE tx_hex LIKE ANY($1) RETURNING *',
+                    [f"%{c}%" for c in search]
+                )
+
+                if deleted_transactions:
+                    deleted_tx_hashes = [record['tx_hash'] for record in deleted_transactions]
+                    logger.info(
+                        f"remove_pending_transactions_by_contains: removed {len(deleted_tx_hashes)} transactions "
+                        f"deleted_tx_hashes: {deleted_tx_hashes}"
+                    )
+                else:
+                    logger.info(
+                        f"remove_pending_transactions_by_contains: no transactions matched patterns {search}"
+                    )
 
     async def get_pending_transaction_by_contains_multi(self, contains: List[str], ignore: str = None):
         async with self.pool.acquire() as connection:
@@ -713,6 +736,54 @@ class Database:
         async with self.pool.acquire() as connection:
             await connection.execute('DELETE FROM pending_spent_outputs WHERE (tx_hash, index) = ANY($1::tx_output[])',
                                      inputs)
+
+    async def remove_pending_spent_outputs_by_tuple(
+            self,
+            inputs: List[Tuple[str, int]],
+            max_retries: int = 3
+    ) -> bool:
+        """
+        Removes entries from pending_spent_outputs with proper error handling and verification.
+        Returns True if successful, False otherwise.
+        """
+        if not inputs:
+            return True
+
+        start_time = perf_counter()
+        retry_delay = 0.2  # initial retry delay
+
+        try:
+            async with self.pool.acquire() as connection:
+                async with connection.transaction(isolation='serializable'):
+                    tx_hashes, indices = zip(*inputs)
+
+                    delete_query = """
+                    DELETE FROM pending_spent_outputs 
+                    WHERE (tx_hash, index) IN (
+                        SELECT * FROM unnest($1::text[], $2::integer[])
+                    )
+                    RETURNING tx_hash, index
+                    """
+                    deleted = await connection.fetch(delete_query, tx_hashes, indices)
+
+                    if len(deleted) != len(inputs):
+                        logger.error(f"Failed to delete all pending_spent_outputs: "
+                                     f"{len(deleted)} of {len(inputs)} deleted")
+                        logger.error(f"Not deleted: {set(inputs) - set(deleted)}")
+                        return False
+
+                    duration = perf_counter() - start_time
+                    logger.info(f"Successfully removed {len(inputs)} pending_spent_outputs in {duration:.3f} seconds")
+                    return True
+
+        except Exception as e:
+            if max_retries > 0:
+                logger.warning(f"Retrying remove_pending_spent_outputs_by_tuple due to error: {type(e).__name__}: {e}")
+                await asyncio.sleep(retry_delay)
+                return await self.remove_pending_spent_outputs_by_tuple(inputs, max_retries - 1)
+            else:
+                logger.error(f"Unrecoverable error in remove_pending_spent_outputs_by_tuple: {type(e).__name__}: {e}")
+                return False
 
     async def get_unspent_outputs(self, outputs: List[Tuple[str, int]]) -> List[Tuple[str, int]]:
         async with self.pool.acquire() as connection:
