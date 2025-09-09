@@ -430,7 +430,7 @@ async def verify_and_push_tx(
             # Broadcast new transaction to WebSocket subscribers
             tx_data = {
                 "tx_hash": tx_hash,
-                "from": tx.inputs[0].address if tx.inputs else None,
+                "from": tx.inputs[0].get_public_key() if tx.inputs else None,
                 "to": [output.address for output in tx.outputs],
                 "amount": sum(output.amount for output in tx.outputs),
                 "fees": tx.fees,
