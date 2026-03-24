@@ -45,6 +45,7 @@ from upow.manager import (
     create_block_in_syncing_old,
     get_inodes_from_cache,
 )
+from upow.reorg import perform_reorg
 from upow.my_logger import CustomLogger
 from upow.node.ip_manager import IPManager
 from upow.node.nodes_manager import NodesManager, NodeInterface
@@ -181,7 +182,9 @@ async def _sync_blockchain(node_url: str = None):
                     last_common_block = local_block["block"]["id"]
                     local_cache = local_blocks[:n]
                     local_cache.reverse()
-                    await db.remove_blocks(last_common_block + 1)
+                    # Full reorg: restores all UTXO + governance state for
+                    # every block after the common ancestor.
+                    await perform_reorg(last_common_block + 1)
                     break
 
     # return
@@ -222,7 +225,10 @@ async def _sync_blockchain(node_url: str = None):
 
             if local_cache is not None:
                 logger.info("sync failed, reverting back to previous chain")
-                await db.delete_blocks(last_common_block)
+                # Properly undo any partially-applied remote blocks, restoring
+                # all UTXO and governance state to the fork point before
+                # re-applying the saved local chain.
+                await perform_reorg(last_common_block + 1)
                 await create_blocks(local_cache)
             return error[0] if error else e
 
@@ -404,11 +410,6 @@ async def exception_handler(request: Request, e: Exception):
         content={"ok": False, "error": f"Uncaught {type(e).__name__} exception"},
     )
 
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    # Shutdown WebSocket manager
-    await shutdown_websocket_manager()
 
 
 transactions_cache = deque(maxlen=100)

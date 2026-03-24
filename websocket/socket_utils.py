@@ -43,6 +43,32 @@ class WebSocketBroadcaster:
             return 0
 
     @staticmethod
+    async def broadcast_mining_info(mining_info: Dict[str, Any]) -> int:
+        """
+        Broadcast mining info to mining_info subscribers
+
+        Args:
+            mining_info: Mining information including difficulty, last block, pending transactions
+
+        Returns:
+            Number of connections the message was sent to
+        """
+        try:
+            message = {
+                "type": "mining_info_update",
+                "data": mining_info,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            sent_count = await websocket_manager.broadcast_to_channel("mining_info", message)
+            logger.info(f"Mining info broadcast - sent to {sent_count} connections")
+            return sent_count
+
+        except Exception as e:
+            logger.error(f"Error broadcasting mining info: {str(e)}")
+            return 0
+
+    @staticmethod
     async def broadcast_new_transaction(tx_data: Dict[str, Any]) -> int:
         """
         Broadcast new transaction to transaction subscribers

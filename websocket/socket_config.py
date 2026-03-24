@@ -20,12 +20,18 @@ ALLOWED_MESSAGE_TYPES = [
     "pong",
     "subscribe_block",
     "unsubscribe_block",
+    "subscribe_transaction",
+    "unsubscribe_transaction",
+    "subscribe_mining_info",
+    "unsubscribe_mining_info",
+    "get_mining_info",
 ]
 
 # Subscription channels
 SUBSCRIPTION_CHANNELS = [
     "block",  # New blocks
     "transaction",  # New transactions
+    "mining_info",  # Mining information
 ]
 
 # Logging
@@ -39,5 +45,4 @@ VALIDATE_ORIGIN = True
 
 # Performance
 ENABLE_COMPRESSION = True
-PING_INTERVAL = 20  # seconds
 PING_TIMEOUT = 10  # seconds

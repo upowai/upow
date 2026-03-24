@@ -32,10 +32,14 @@ async def websocket_endpoint(websocket: WebSocket):
         connection = await websocket_manager.add_connection(websocket)
 
         # Handle incoming messages
-        while True:
+        while connection.is_alive:
             message = await connection.receive_message()
             if message is None:
-                break
+                # None means non-fatal (rate limit, bad JSON, etc.) — only stop if
+                # the connection itself is dead (disconnect or internal close)
+                if not connection.is_alive:
+                    break
+                continue
 
             # Process the message
             await message_handler.handle_message(connection, message)

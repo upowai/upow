@@ -194,12 +194,6 @@ class WebSocketConnection:
                     f"Received message from {self.connection_id}: {message['type']}"
                 )
 
-            # Log orderbook subscribe/unsubscribe messages for debugging
-            if message["type"] in ["subscribe_orderbook", "unsubscribe_orderbook"]:
-                logger.info(
-                    f"ORDERBOOK_DEBUG: Received {message['type']} from {self.connection_id}: {message}"
-                )
-
             return message
 
         except json.JSONDecodeError:

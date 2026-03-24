@@ -16,3 +16,4 @@ logs/
 emission_details.json
 ip_config.json
 nodes.json.lock
+.DS_Store

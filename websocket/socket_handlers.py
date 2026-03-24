@@ -3,8 +3,12 @@ Handles different types of WebSocket messages for blockchain functionality
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime, timezone
+
+from upow.database import Database
+from upow.manager import Manager, get_difficulty, get_transactions_merkle_tree
+from upow.helpers import timestamp, sha256
 
 from .socket_connection import WebSocketConnection
 from .socket_manager import websocket_manager
@@ -28,6 +32,9 @@ class WebSocketMessageHandler:
             "unsubscribe_block": self.handle_unsubscribe_block,
             "subscribe_transaction": self.handle_subscribe_transaction,
             "unsubscribe_transaction": self.handle_unsubscribe_transaction,
+            "subscribe_mining_info": self.handle_subscribe_mining_info,
+            "unsubscribe_mining_info": self.handle_unsubscribe_mining_info,
+            "get_mining_info": self.handle_get_mining_info,
         }
 
     async def handle_message(
@@ -78,17 +85,6 @@ class WebSocketMessageHandler:
         # Just update the last heartbeat time (already done in receive_message)
         logger.debug(f"Received pong from connection {connection.connection_id}")
         return True
-
-    async def handle_authenticate(
-        self, connection: WebSocketConnection, message: Dict[str, Any]
-    ) -> bool:
-        """Handle authentication messages"""
-        # This is handled by the authenticator during initial connection
-        # If we receive it here, the connection is already established
-        await connection.send_error(
-            "ALREADY_CONNECTED", "Connection already established"
-        )
-        return False
 
     async def handle_subscribe_block(
         self, connection: WebSocketConnection, message: Dict[str, Any]
@@ -191,6 +187,87 @@ class WebSocketMessageHandler:
             logger.error(f"Error handling transaction unsubscription: {str(e)}")
             await connection.send_error(
                 "UNSUBSCRIPTION_ERROR", "Error processing transaction unsubscription"
+            )
+            return False
+            
+    async def handle_subscribe_mining_info(
+        self, connection: WebSocketConnection, message: Dict[str, Any]
+    ) -> bool:
+        """Handle mining info subscription requests"""
+        try:
+            # Subscribe to mining info updates
+            await websocket_manager.add_channel_subscriber(
+                connection.connection_id, "mining_info"
+            )
+            await connection.send_success(
+                "subscribe_mining_info", {"status": "subscribed"}
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error subscribing to mining info: {str(e)}")
+            await connection.send_error(
+                "SUBSCRIBE_ERROR", "Error subscribing to mining info"
+            )
+            return False
+
+    async def handle_unsubscribe_mining_info(
+        self, connection: WebSocketConnection, message: Dict[str, Any]
+    ) -> bool:
+        """Handle mining info unsubscription requests"""
+        try:
+            # Unsubscribe from mining info updates
+            await websocket_manager.remove_channel_subscriber(
+                connection.connection_id, "mining_info"
+            )
+            await connection.send_success(
+                "unsubscribe_mining_info", {"status": "unsubscribed"}
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error unsubscribing from mining info: {str(e)}")
+            await connection.send_error(
+                "UNSUBSCRIBE_ERROR", "Error unsubscribing from mining info"
+            )
+            return False
+            
+    async def handle_get_mining_info(
+        self, connection: WebSocketConnection, message: Dict[str, Any]
+    ) -> bool:
+        """Handle one-time mining info request"""
+        try:
+            # Get database instance
+            db = Database.instance
+            
+            # Reset difficulty cache
+            Manager.difficulty = None
+            
+            # Get current difficulty and last block
+            difficulty, last_block = await get_difficulty()
+            
+            # Get pending transactions
+            pending_transactions = await db.get_pending_transactions_limit(hex_only=True)
+            pending_transactions = sorted(pending_transactions)
+            selected_transactions = pending_transactions[:10]
+
+            # Create mining info response
+            mining_info = {
+                "ok": True,
+                "result": {
+                    "difficulty": difficulty,
+                    "last_block": last_block,
+                    "pending_transactions": selected_transactions,
+                    "pending_transactions_hashes": [sha256(tx) for tx in selected_transactions],
+                    "merkle_root": get_transactions_merkle_tree(selected_transactions),
+                },
+            }
+            
+            # Send mining info to the client
+            await connection.send_success("mining_info", mining_info)
+            return True
+        except Exception as e:
+            logger.error(f"Error getting mining info: {str(e)}")
+            await connection.send_error(
+                "MINING_INFO_ERROR", f"Error retrieving mining information: {str(e)}"
             )
             return False
 
