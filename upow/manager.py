@@ -9,7 +9,7 @@ from typing import Tuple, List, Union
 
 from icecream import ic
 
-from .constants import MAX_SUPPLY, ENDIAN, MAX_BLOCK_SIZE_HEX
+from .constants import MAX_SUPPLY, ENDIAN, MAX_BLOCK_SIZE_HEX, SYNC_CHECKPOINTS
 from .database import Database, emission_details
 from .helpers import (
     sha256,
@@ -27,6 +27,7 @@ BLOCK_TIME = 60
 BLOCKS_COUNT = Decimal(100)
 LAST_BLOCK_FOR_GENESIS_KEY = 10000
 START_DIFFICULTY = Decimal("6.0")
+CHECKPOINT_HEIGHT = max(SYNC_CHECKPOINTS.keys()) if SYNC_CHECKPOINTS else 0
 cache = {}
 cache_expiration = timedelta(minutes=5)
 cache_updating = False
@@ -44,6 +45,16 @@ def difficulty_to_hashrate_old(difficulty: Decimal) -> int:
 def difficulty_to_hashrate(difficulty: Decimal) -> int:
     decimal = difficulty % 1
     return Decimal(16 ** int(difficulty) * (16 / ceil(16 * (1 - decimal))))
+
+
+difficulty_to_work = difficulty_to_hashrate
+
+
+def compute_fork_work(blocks: list) -> Decimal:
+    return sum(
+        difficulty_to_work(Decimal(str(b["block"]["difficulty"])))
+        for b in blocks
+    )
 
 
 def hashrate_to_difficulty_old(hashrate: int) -> Decimal:
@@ -420,7 +431,8 @@ def split_block_content(block_content: str):
 
 
 async def check_block(
-    block_content: str, transactions: List[Transaction], mining_info: tuple = None, error_list=None
+    block_content: str, transactions: List[Transaction], mining_info: tuple = None,
+    error_list=None, checkpoint_mode=False,
 ):
     if error_list is None:
         error_list = []
@@ -465,6 +477,26 @@ async def check_block(
         error_list.append(error := "block is too big")
         logger.error(error)
         return False
+
+    if checkpoint_mode:
+        if transactions:
+            input_txs_hash = sum(
+                [[tx_input.tx_hash for tx_input in tx.inputs] for tx in transactions],
+                [],
+            )
+            input_txs = await database.get_transactions_info(input_txs_hash)
+            for transaction in transactions:
+                await transaction._fill_transaction_inputs(input_txs)
+            for transaction in transactions:
+                await transaction.get_fees()
+        transactions_merkle_tree = get_transactions_merkle_tree(transactions)
+        if merkle_tree != transactions_merkle_tree:
+            if block_no == 340510 and merkle_tree == '54e7e3fbfe5c3c7b2a74d14efd22a61c231d157b2c5c2476fca67736736b9ac8':
+                return True
+            error_list.append(error := "merkle tree does not match")
+            logger.error(error)
+            return False
+        return True
 
     if transactions:
         check_inputs = sum(
@@ -528,19 +560,20 @@ async def check_block(
             [],
         )
 
-        unspent_outputs = await database.get_unspent_outputs(check_inputs)
-        unspent_inode_outputs = await database.get_inode_outputs(check_inode_inputs)
-        unspent_validator_power_outputs = (
-            await database.get_validator_voting_power_outputs(validator_power_inputs)
-        )
-        unspent_delegate_power_outputs = (
-            await database.get_delegates_voting_power_outputs(delegate_power_inputs)
-        )
-        inode_ballot_outputs = await database.get_inodes_ballot_outputs(
-            inode_ballot_inputs
-        )
-        validator_ballot_outputs = await database.get_validators_ballot_outputs(
-            validator_ballot_inputs
+        (
+            unspent_outputs,
+            unspent_inode_outputs,
+            unspent_validator_power_outputs,
+            unspent_delegate_power_outputs,
+            inode_ballot_outputs,
+            validator_ballot_outputs,
+        ) = await asyncio.gather(
+            database.get_unspent_outputs(check_inputs),
+            database.get_inode_outputs(check_inode_inputs),
+            database.get_validator_voting_power_outputs(validator_power_inputs),
+            database.get_delegates_voting_power_outputs(delegate_power_inputs),
+            database.get_inodes_ballot_outputs(inode_ballot_inputs),
+            database.get_validators_ballot_outputs(validator_ballot_inputs),
         )
         if (
             len(set(check_inputs)) != len(check_inputs)
@@ -625,8 +658,16 @@ async def check_block(
         for transaction in transactions:
             await transaction._fill_transaction_inputs(input_txs)
 
-    for transaction in transactions:
-        if not await transaction.verify(check_double_spend=False):
+    verify_results = await asyncio.gather(
+        *[transaction.verify(check_double_spend=False) for transaction in transactions],
+        return_exceptions=True,
+    )
+    for transaction, result in zip(transactions, verify_results):
+        if isinstance(result, Exception):
+            error_list.append(error := f"transaction {transaction.hash()} verification error: {result}")
+            logger.error(error)
+            return False
+        if not result:
             error_list.append(error := f"transaction {transaction.hash()} has been not verified")
             logger.error(error)
             return False
@@ -760,7 +801,7 @@ async def create_block(
 async def create_block_in_syncing_old(
     block_content: str, transactions: List[Transaction],
         cb_transaction: CoinbaseTransaction,
-        last_block: dict = None, error_list=None
+        last_block: dict = None, error_list=None, checkpoint_mode=False
 ):
     if error_list is None:
         error_list = []
@@ -774,7 +815,7 @@ async def create_block_in_syncing_old(
         # difficulty = Decimal(str(last_block['difficulty']))
     block_no = last_block["id"] + 1 if last_block != {} else 1
     logger.info(f"Syncing block no. {block_no}")
-    if not await check_block(block_content, transactions, (difficulty, last_block), error_list=error_list):
+    if not await check_block(block_content, transactions, (difficulty, last_block), error_list=error_list, checkpoint_mode=checkpoint_mode):
         return False
 
     database: Database = Database.instance
@@ -789,7 +830,6 @@ async def create_block_in_syncing_old(
 
     coinbase_transaction = cb_transaction
 
-    # if not coinbase_transaction.outputs[0].verify():
     if not all(tx_output.verify() for tx_output in coinbase_transaction.outputs):
         return False
 
@@ -803,23 +843,26 @@ async def create_block_in_syncing_old(
         block_reward + fees,
         content_time,
     )
-    await database.add_transaction(coinbase_transaction, block_hash)
 
     try:
-        await database.add_transactions(transactions, block_hash)
+        await database.add_transactions(
+            [coinbase_transaction] + transactions, block_hash
+        )
     except Exception as e:
         logger.error(f"a transaction has not been added in block {block_no}", e)
         await database.delete_block(block_no)
         return False
-    # await database.add_unspent_transactions_outputs(transactions + [coinbase_transaction])
-    await database.add_transaction_outputs(transactions + [coinbase_transaction])
+
+    write_ops = [database.add_transaction_outputs(transactions + [coinbase_transaction])]
     if transactions:
-        await database.remove_pending_transactions_by_hash(
-            [transaction.hash() for transaction in transactions]
-        )
-        # await database.remove_unspent_outputs(transactions)
-        await database.remove_outputs(transactions)
-        await database.remove_pending_spent_outputs(transactions)
+        write_ops.extend([
+            database.remove_pending_transactions_by_hash(
+                [transaction.hash() for transaction in transactions]
+            ),
+            database.remove_outputs(transactions),
+            database.remove_pending_spent_outputs(transactions),
+        ])
+    await asyncio.gather(*write_ops)
 
     block_duration = perf_counter() - create_start_time
     logger.info(

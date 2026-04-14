@@ -193,6 +193,10 @@ class NodeInterface:
         res = await self.request("get_nodes")
         return res["result"]
 
+    async def get_mining_info(self):
+        res = await self.request("get_mining_info")
+        return res["result"]
+
     async def request(self, path: str, data: dict = {}, sender_node: str = ""):
         headers = {"Sender-Node": sender_node}
         if path in ("push_block", "push_tx"):

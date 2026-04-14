@@ -1,6 +1,7 @@
 import json
 import random
 import re
+import asyncio
 from asyncio import gather
 from collections import deque, defaultdict
 from decimal import Decimal
@@ -29,7 +30,7 @@ from websocket.socket_endpoint import (
 )
 
 import upow.helpers
-from upow.constants import VERSION, ENDIAN, MAX_SUPPLY
+from upow.constants import VERSION, ENDIAN, MAX_SUPPLY, SYNC_CHECKPOINTS
 from upow.database import Database
 from upow.helpers import timestamp, sha256
 from upow.manager import (
@@ -44,6 +45,9 @@ from upow.manager import (
     get_circulating_supply,
     create_block_in_syncing_old,
     get_inodes_from_cache,
+    compute_fork_work,
+    difficulty_to_work,
+    CHECKPOINT_HEIGHT,
 )
 from upow.reorg import perform_reorg
 from upow.my_logger import CustomLogger
@@ -109,7 +113,19 @@ async def create_blocks(blocks: list, error_list=None):
     for block_info in blocks:
         block = block_info["block"]
         txs_hex = block_info["transactions"]
-        txs = [await Transaction.from_hex(tx) for tx in txs_hex]
+
+        if i in SYNC_CHECKPOINTS and block["hash"] != SYNC_CHECKPOINTS[i]:
+            error_list.append(
+                f"Checkpoint mismatch at block {i}: "
+                f"expected {SYNC_CHECKPOINTS[i]}, got {block['hash']}"
+            )
+            return False
+
+        use_checkpoint = i <= CHECKPOINT_HEIGHT
+        txs = [
+            await Transaction.from_hex(tx, check_signatures=not use_checkpoint)
+            for tx in txs_hex
+        ]
         cb_tx = None
         for tx in txs:
             if isinstance(tx, CoinbaseTransaction):
@@ -118,25 +134,10 @@ async def create_blocks(blocks: list, error_list=None):
                 break
         hex_txs = [tx.hex() for tx in txs]
         block["merkle_tree"] = get_transactions_merkle_tree(hex_txs)
-        # if i > 22500 else get_transactions_merkle_tree_ordered(hex_txs)
         block_content = block.get("content") or block_to_bytes(
             last_block["hash"], block
         )
 
-        # if i <= 22500 and sha256(block_content) != block['hash'] and i != 17972:
-        #     from itertools import permutations
-        #     for l in permutations(hex_txs):
-        #         _hex_txs = list(l)
-        #         block['merkle_tree'] = get_transactions_merkle_tree_ordered(_hex_txs)
-        #         block_content = block_to_bytes(last_block['hash'], block)
-        #         if sha256(block_content) == block['hash']:
-        #             break
-        # elif 131309 < i < 150000 and sha256(block_content) != block['hash']:
-        #     for diff in range(0, 100):
-        #         block['difficulty'] = diff / 10
-        #         block_content = block_to_bytes(last_block['hash'], block)
-        #         if sha256(block_content) == block['hash']:
-        #             break
         assert i == block["id"]
         if not await create_block_in_syncing_old(
             block_content.hex() if isinstance(block_content, bytes) else block_content,
@@ -144,11 +145,28 @@ async def create_blocks(blocks: list, error_list=None):
             cb_tx,
             last_block,
             error_list=error_list,
+            checkpoint_mode=use_checkpoint,
         ):
             return False
         last_block = block
         i += 1
     return True
+
+
+async def _pick_best_peer(candidates: list, local_height: int) -> str | None:
+    best_url = None
+    best_height = local_height
+    for url in candidates:
+        try:
+            info = await NodeInterface(url).get_mining_info()
+            peer_block = info.get("last_block", {})
+            peer_height = peer_block.get("id", 0) if peer_block else 0
+            if peer_height > best_height:
+                best_height = peer_height
+                best_url = url
+        except Exception:
+            continue
+    return best_url
 
 
 async def _sync_blockchain(node_url: str = None):
@@ -159,7 +177,11 @@ async def _sync_blockchain(node_url: str = None):
         if not nodes:
             logger.error(msg := "No nodes found.")
             return msg
-        node_url = random.choice(nodes)
+        _, last_block = await calculate_difficulty()
+        local_height = last_block["id"] if last_block else 0
+        node_url = await _pick_best_peer(nodes, local_height)
+        if node_url is None:
+            node_url = random.choice(nodes)
     node_url = node_url.strip("/")
     _, last_block = await calculate_difficulty()
     starting_from = i = await db.get_next_block_id()
@@ -180,22 +202,57 @@ async def _sync_blockchain(node_url: str = None):
                 if local_block["block"]["hash"] == remote_blocks[n]["block"]["hash"]:
                     print(local_block, remote_blocks[n])
                     last_common_block = local_block["block"]["id"]
-                    local_cache = local_blocks[:n]
-                    local_cache.reverse()
-                    # Full reorg: restores all UTXO + governance state for
-                    # every block after the common ancestor.
+
+                    local_fork = local_blocks[:n]
+                    local_fork.reverse()
+                    local_fork_work = compute_fork_work(local_fork)
+
+                    remote_fork_len = len(local_fork)
+                    try:
+                        remote_tip_info = await node_interface.get_mining_info()
+                        remote_tip = remote_tip_info.get("last_block", {})
+                        remote_height = remote_tip.get("id", 0) if remote_tip else 0
+                        remote_fork_len = max(remote_fork_len, remote_height - last_common_block)
+                    except Exception:
+                        pass
+                    last_known_difficulty = Decimal(str(local_fork[-1]["block"]["difficulty"])) if local_fork else last_block["difficulty"]
+                    remote_fork_work = difficulty_to_work(last_known_difficulty) * remote_fork_len
+
+                    if remote_fork_work <= local_fork_work:
+                        logger.info(
+                            "Remote fork has equal/less work (%s vs %s), keeping local chain",
+                            remote_fork_work, local_fork_work,
+                        )
+                        return True
+
+                    logger.info(
+                        "Remote fork has more work (%s vs %s), switching chain",
+                        remote_fork_work, local_fork_work,
+                    )
+                    local_cache = local_fork
                     await perform_reorg(last_common_block + 1)
                     break
 
-    # return
     limit = 1000
+    MAX_SYNC_BATCHES = 50
+    batches = 0
+    prefetch_task = None
     while True:
+        batches += 1
+        if batches > MAX_SYNC_BATCHES:
+            logger.info("sync paused after %d batches, will resume next cycle", MAX_SYNC_BATCHES)
+            if prefetch_task is not None:
+                prefetch_task.cancel()
+            break
         i = await db.get_next_block_id()
         try:
-            blocks = await node_interface.get_blocks(i, limit)
+            if prefetch_task is not None:
+                blocks = await prefetch_task
+                prefetch_task = None
+            else:
+                blocks = await node_interface.get_blocks(i, limit)
         except Exception as e:
             logger.error(e)
-            # NodesManager.get_nodes().remove(node_url)
             NodesManager.sync()
             break
         try:
@@ -205,7 +262,6 @@ async def _sync_blockchain(node_url: str = None):
                 if last_block["id"] > starting_from:
                     NodesManager.update_last_message(node_url)
                     if timestamp() - last_block["timestamp"] < 86400:
-                        # if last block is from less than a day ago, propagate it
                         txs_hashes = await db.get_block_transaction_hashes(
                             last_block["hash"]
                         )
@@ -219,15 +275,19 @@ async def _sync_blockchain(node_url: str = None):
                             node_url,
                         )
                 return True
+            if batches < MAX_SYNC_BATCHES:
+                prefetch_task = asyncio.create_task(
+                    node_interface.get_blocks(i + len(blocks), limit)
+                )
             assert await create_blocks(blocks, error_list=error)
         except Exception as e:
+            if prefetch_task is not None:
+                prefetch_task.cancel()
+                prefetch_task = None
             logger.error(error[0] if error else e)
 
             if local_cache is not None:
                 logger.info("sync failed, reverting back to previous chain")
-                # Properly undo any partially-applied remote blocks, restoring
-                # all UTXO and governance state to the fork point before
-                # re-applying the saved local chain.
                 await perform_reorg(last_common_block + 1)
                 await create_blocks(local_cache)
             return error[0] if error else e
@@ -571,6 +631,14 @@ async def push_block(
             "error": "Blocks missing, had to sync according to sender node, block may have been accepted",
         }
     if next_block_id > block_no:
+        if "Sender-Node" in request.headers:
+            background_tasks.add_task(
+                sync_blockchain, request.headers["Sender-Node"]
+            )
+            return {
+                "ok": False,
+                "error": "Competing block at same height, syncing to compare chain work",
+            }
         return {"ok": False, "error": "Too old block"}
     final_transactions = []
     hashes = []

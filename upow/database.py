@@ -548,26 +548,23 @@ class Database:
               enumerate(transaction.outputs) if output.transaction_type == OutputType.VOTE_AS_DELEGATE] for
              transaction in transactions], [])
 
+        aws = []
         if unspent_outputs:
-            await self.add_unspent_outputs(unspent_outputs)
-
+            aws.append(self.add_unspent_outputs(unspent_outputs))
         if inode_registration_outputs:
-            await self.add_inode_registration_outputs(inode_registration_outputs)
-
+            aws.append(self.add_inode_registration_outputs(inode_registration_outputs))
         if validator_voting_power:
-            await self.add_validator_voting_power(validator_voting_power)
-
+            aws.append(self.add_validator_voting_power(validator_voting_power))
         if delegate_voting_power:
-            await self.add_delegates_voting_power(delegate_voting_power)
-
+            aws.append(self.add_delegates_voting_power(delegate_voting_power))
         if validator_registration_outputs:
-            await self.add_validator_registration_outputs(validator_registration_outputs)
-
+            aws.append(self.add_validator_registration_outputs(validator_registration_outputs))
         if inode_votes:
-            await self.add_vote_to_inode_ballots(inode_votes)
-
+            aws.append(self.add_vote_to_inode_ballots(inode_votes))
         if validator_votes:
-            await self.add_vote_to_validators_ballot(validator_votes)
+            aws.append(self.add_vote_to_validators_ballot(validator_votes))
+        if aws:
+            await asyncio.gather(*aws)
 
     async def add_unspent_transactions_outputs(self, transactions: List[Transaction]) -> None:
         outputs = sum(
@@ -597,18 +594,21 @@ class Database:
                            TransactionType.VOTE_AS_DELEGATE, TransactionType.REVOKE_AS_VALIDATOR,
                            TransactionType.REVOKE_AS_DELEGATE)]
 
+        aws = []
         if inode_inputs:
-            await self.remove_inode_registration_output(inode_inputs)
+            aws.append(self.remove_inode_registration_output(inode_inputs))
         if unspent_inputs:
-            await self.remove_unspent_outputs(unspent_inputs)
+            aws.append(self.remove_unspent_outputs(unspent_inputs))
         if validator_vote_input:
-            await self.remove_validators_voting_power(validator_vote_input)
+            aws.append(self.remove_validators_voting_power(validator_vote_input))
         if delegate_vote_input:
-            await self.remove_delegates_voting_power(delegate_vote_input)
+            aws.append(self.remove_delegates_voting_power(delegate_vote_input))
         if inode_ballot_input:
-            await self.remove_inode_ballot_votes(inode_ballot_input)
+            aws.append(self.remove_inode_ballot_votes(inode_ballot_input))
         if validator_ballot_input:
-            await self.remove_validator_ballot_votes(validator_ballot_input)
+            aws.append(self.remove_validator_ballot_votes(validator_ballot_input))
+        if aws:
+            await asyncio.gather(*aws)
 
     async def remove_unspent_outputs(self, transactions: List[Transaction], max_retries: int = 3) -> bool:
         """
