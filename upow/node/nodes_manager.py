@@ -44,6 +44,7 @@ db = pickledb.load(path, False)  # Disable auto-dump
 
 
 class NodesManager:
+    _initialized = False  # New flag to ensure init() runs only once per process
     last_messages: dict = None
     nodes: list = None
     db = db
@@ -52,8 +53,19 @@ class NodesManager:
     async_client = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
 
     @staticmethod
+    def canonicalize_url(url: str) -> str:
+        """Converts a node URL to a canonical form (e.g., replaces localhost with 127.0.0.1, strips trailing slash)."""
+        url = url.strip().rstrip('/')
+        if 'localhost' in url:
+            url = url.replace('localhost', '127.0.0.1')
+        return url
+
+    @staticmethod
     def init():
-        core_url = CORE_URL.rstrip("/")
+        if NodesManager._initialized:
+            return
+
+        core_url = NodesManager.canonicalize_url(CORE_URL)
         with file_lock:
             try:
                 NodesManager.db._loaddb()
@@ -63,10 +75,20 @@ class NodesManager:
                     json.dump({}, f)
                 NodesManager.db._loaddb()
 
-            NodesManager.nodes = NodesManager.db.get("nodes") or [core_url]
-            NodesManager.last_messages = NodesManager.db.get("last_messages") or {
-                core_url: timestamp()
+            # Canonicalize URLs when loading from DB and ensure uniqueness, filtering out empty strings
+            loaded_nodes = [NodesManager.canonicalize_url(n) for n in (NodesManager.db.get("nodes") or []) if n]
+            if core_url not in loaded_nodes:
+                loaded_nodes.insert(0, core_url) # Add to front if not present
+            NodesManager.nodes = [n for n in list(dict.fromkeys(loaded_nodes)) if n] # Remove duplicates and ensure no empty strings
+
+            loaded_last_messages = NodesManager.db.get("last_messages") or {}
+            NodesManager.last_messages = {
+                NodesManager.canonicalize_url(k): v for k, v in loaded_last_messages.items() if k # Filter empty keys
             }
+            if core_url not in NodesManager.last_messages:
+                NodesManager.last_messages[core_url] = timestamp()
+
+            NodesManager._initialized = True # Set flag after successful initialization
 
     @staticmethod
     def sync():
@@ -95,7 +117,9 @@ class NodesManager:
 
     @staticmethod
     def add_node(node: str):
-        node = node.strip("/")
+        node = NodesManager.canonicalize_url(node) # Canonicalize here
+        if not node: # Do not add empty string nodes
+            return
         if (
             len(NodesManager.nodes) > MAX_NODES_COUNT
             or len(NodesManager.get_zero_nodes()) > 10
@@ -103,18 +127,21 @@ class NodesManager:
             NodesManager.clear_old_nodes()
         if len(NodesManager.nodes) > MAX_NODES_COUNT:
             raise Exception("Too many nodes")
-        NodesManager.init()
-        NodesManager.nodes.append(node)
+        NodesManager.init() # This will now only load from disk once
+        if node not in NodesManager.nodes: # Check for existence after canonicalization
+            NodesManager.nodes.append(node)
         NodesManager.sync()
 
     @staticmethod
     def get_nodes():
-        NodesManager.init()
-        NodesManager.nodes.extend(NodesManager.last_messages.keys())
-        NodesManager.nodes = [
-            node.strip("/") for node in NodesManager.nodes if len(node)
-        ]
-        NodesManager.nodes = list(dict.fromkeys(NodesManager.nodes))
+        NodesManager.init() # This will now only load from disk once
+        # Canonicalize keys from last_messages before extending, filtering out empty strings
+        canonical_last_messages_keys = [NodesManager.canonicalize_url(k) for k in NodesManager.last_messages.keys() if k]
+        # Combine existing nodes with new canonicalized keys, then deduplicate
+        combined_nodes = NodesManager.nodes + canonical_last_messages_keys
+        # All nodes should already be canonicalized by init() or add_node(),
+        # so just deduplicate.
+        NodesManager.nodes = list(dict.fromkeys(combined_nodes))
         NodesManager.sync()
         return NodesManager.nodes
 
@@ -150,30 +177,39 @@ class NodesManager:
 
     @staticmethod
     def clear_old_nodes():
-        NodesManager.init()
+        NodesManager.init() # This will now only load from disk once
+        # Ensure nodes are canonicalized before filtering
+        canonical_nodes = [NodesManager.canonicalize_url(node) for node in NodesManager.get_nodes() if node] # Filter empty strings
         NodesManager.nodes = [
             node
-            for node in NodesManager.get_nodes()
+            for node in canonical_nodes
             if NodesManager.get_last_message(node) > timestamp() - INACTIVE_NODES_DELTA
         ]
         NodesManager.sync()
 
     @staticmethod
     def get_last_message(node_url: str):
-        NodesManager.init()
+        NodesManager.init() # This will now only load from disk once
+        canonical_node_url = NodesManager.canonicalize_url(node_url) # Canonicalize here
+        if not canonical_node_url: # If URL is empty after canonicalization, it's not a valid node
+            return 0
         last_messages = NodesManager.last_messages
-        return last_messages[node_url] if node_url in last_messages else 0
+        return last_messages[canonical_node_url] if canonical_node_url in last_messages else 0
 
     @staticmethod
     def update_last_message(node_url: str):
-        NodesManager.init()
-        NodesManager.last_messages[node_url.strip("/")] = timestamp()
+        NodesManager.init() # This will now only load from disk once
+        canonical_node_url = NodesManager.canonicalize_url(node_url) # Canonicalize here
+        if not canonical_node_url: # Do not update for empty string nodes
+            return
+        NodesManager.last_messages[canonical_node_url] = timestamp()
         NodesManager.sync()
 
 
 class NodeInterface:
     def __init__(self, url: str):
-        self.url = url.strip("/")
+        # Canonicalize URL when creating NodeInterface instance
+        self.url = NodesManager.canonicalize_url(url)
         self.base_url = self.url.replace("http://", "", 1).replace("https://", "", 1)
 
     async def get_block(self, block_no: int, full_transactions: bool = False):

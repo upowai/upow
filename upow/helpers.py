@@ -88,6 +88,12 @@ class OutputType(IntEnum):
     VALIDATOR_VOTING_POWER = 8
     DELEGATE_VOTING_POWER = 9
 
+class NodeState(Enum):
+    PENDING       = "pending"
+    BOOTSTRAPPING = "bootstrapping"
+    READY         = "ready"
+    FAILED        = "failed"
+
 
 class InputType(IntEnum):
     REGULAR = 0

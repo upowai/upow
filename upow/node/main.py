@@ -32,7 +32,7 @@ from websocket.socket_endpoint import (
 import upow.helpers
 from upow.constants import VERSION, ENDIAN, MAX_SUPPLY, SYNC_CHECKPOINTS
 from upow.database import Database
-from upow.helpers import timestamp, sha256
+from upow.helpers import timestamp, sha256, NodeState
 from upow.manager import (
     create_block,
     get_difficulty,
@@ -80,12 +80,19 @@ app.add_middleware(
 # Include WebSocket router
 app.include_router(websocket_router)
 
+node_state: NodeState = NodeState.PENDING
+_bootstrap_lock = asyncio.Lock()
 
 async def propagate(path: str, args: dict, ignore_url=None, nodes: list = None):
     global self_url
+    if not self_url:
+        print("[propagate] WARNING: self_url is not set yet, skipping propagation")
+        return
     self_node = NodeInterface(self_url or "")
     ignore_node = NodeInterface(ignore_url or "")
     aws = []
+    target_nodes = []  # track which node each task maps to
+
     for node_url in nodes or NodesManager.get_propagate_nodes():
         node_interface = NodeInterface(node_url)
         if (
@@ -94,9 +101,15 @@ async def propagate(path: str, args: dict, ignore_url=None, nodes: list = None):
         ):
             continue
         aws.append(node_interface.request(path, args, self_node.url))
-    for response in await gather(*aws, return_exceptions=True):
-        pass
-        # print(path, response)
+        target_nodes.append(node_url)  # keep mapping
+
+    results = await gather(*aws, return_exceptions=True)
+
+    for node_url, response in zip(target_nodes, results):
+        if isinstance(response, Exception):
+            print(f"[propagate] FAILED → {node_url}/{path} | Error: {type(response).__name__}: {response}")
+        else:
+            print(f"[propagate] OK → {node_url}/{path}")
 
 
 async def create_blocks(blocks: list, error_list=None):
@@ -153,7 +166,7 @@ async def create_blocks(blocks: list, error_list=None):
     return True
 
 
-async def _pick_best_peer(candidates: list, local_height: int) -> str | None:
+async def _pick_best_peer(candidates: list, local_height: int) -> Union[str, None]:
     best_url = None
     best_height = local_height
     for url in candidates:
@@ -194,7 +207,11 @@ async def _sync_blockchain(node_url: str = None):
             offset, limit = i - 500, 500
             remote_blocks = await node_interface.get_blocks(offset, limit)
             local_blocks = await db.get_blocks(offset, limit)
-            local_blocks = local_blocks[: len(remote_blocks)]
+            # Align lengths
+            min_len = min(len(remote_blocks), len(local_blocks))
+            remote_blocks = remote_blocks[:min_len]
+            local_blocks = local_blocks[:min_len]
+
             local_blocks.reverse()
             remote_blocks.reverse()
             print(len(remote_blocks), len(local_blocks))
@@ -348,12 +365,75 @@ async def propagate_old_transactions(propagate_txs):
     for tx_hex in propagate_txs:
         await propagate("push_tx", {"tx_hex": tx_hex})
 
+async def _bootstrap():
+    global node_state
+
+    async with _bootstrap_lock:
+        if node_state not in (NodeState.PENDING, NodeState.FAILED):
+            return  # already bootstrapping or done
+
+        node_state = NodeState.BOOTSTRAPPING
+        ic(f"[bootstrap] self_url={self_url}")
+
+        # Peers to try — exclude self
+        candidates = [
+            n for n in NodesManager.get_propagate_nodes()
+            if NodesManager.canonicalize_url(n) != self_url
+        ]
+        ic(f"[bootstrap] candidate peers: {candidates}")
+
+        if not candidates:
+            ic("[bootstrap] no peers found — starting isolated")
+            node_state = NodeState.READY
+            return
+
+        # Try each candidate until one responds
+        bootstrap_node = None
+        for node_url in candidates:
+            try:
+                j = await NodesManager.request(f"{node_url}/get_nodes")
+                peer_nodes = j.get("result", [])
+                for n in peer_nodes:
+                    if NodesManager.canonicalize_url(n) != self_url:
+                        NodesManager.add_node(n)
+                NodesManager.update_last_message(node_url)
+                bootstrap_node = node_url
+                ic(f"[bootstrap] synced {len(peer_nodes)} peers from {node_url}")
+                break
+            except Exception as e:
+                ic(f"[bootstrap] {node_url} unreachable: {type(e).__name__}: {e}")
+                continue
+
+        if not bootstrap_node:
+            ic("[bootstrap] all peers unreachable — starting isolated")
+            # Not fatal; incoming connections will register new peers over time
+            node_state = NodeState.READY
+            return
+
+        # Announce self to the network
+        try:
+            await propagate("add_node", {"url": self_url})
+            ic(f"[bootstrap] announced self to network")
+        except Exception as e:
+            ic(f"[bootstrap] self-announcement failed: {type(e).__name__}: {e}")
+
+        # Also announce to cousin nodes from the bootstrap peer
+        try:
+            cousin_nodes = await NodeInterface(bootstrap_node).get_nodes()
+            await propagate("add_node", {"url": self_url}, nodes=cousin_nodes)
+            ic(f"[bootstrap] announced self to {len(cousin_nodes)} cousin nodes")
+        except Exception as e:
+            ic(f"[bootstrap] cousin announcement failed: {type(e).__name__}: {e}")
+
+        node_state = NodeState.READY
+        ic(f"[bootstrap] complete")
+
 
 @app.middleware("http")
 async def middleware(request: Request, call_next):
-    global started, self_url
-    nodes = NodesManager.get_recent_nodes()
-    hostname = request.base_url.hostname
+    global self_url, node_state
+
+    # 1. IP allow-list
     client_ip = await get_ip_address_from_header(request)
 
     if not ip_filter.is_ip_allowed(client_ip):
@@ -361,7 +441,7 @@ async def middleware(request: Request, call_next):
             status_code=403, content={"ok": False, "error": "Access forbidden."}
         )
 
-    # Normalize the URL path by removing extra slashes
+    # 2 Normalize the URL path by removing extra slashes
     normalized_path = re.sub("/+", "/", request.scope["path"])
     if normalized_path != request.scope["path"]:
         url = request.url
@@ -369,17 +449,17 @@ async def middleware(request: Request, call_next):
         # Redirect to normalized URL
         return RedirectResponse(new_url)
 
+    # 3. Endpoint block-list
     if ip_filter.is_endpoint_blocked(normalized_path):
         return JSONResponse(
             status_code=403,
             content={"ok": False, "error": "Access forbidden temporarily."},
         )
 
-    if "Sender-Node" in request.headers:
-        NodesManager.add_node(request.headers["Sender-Node"])
-
+    # 4. Localhost-only endpoints
     if normalized_path == "/send_to_address" and not (
-        ip_is_local(hostname) or hostname == "localhost"
+        ip_is_local(request.base_url.hostname)
+        or request.base_url.hostname == "localhost"
     ):
         return JSONResponse(
             status_code=403,
@@ -389,44 +469,35 @@ async def middleware(request: Request, call_next):
             },
         )
 
-    # Only initialize nodes if this is not a /get_nodes request to prevent recursion
-    if normalized_path != "/get_nodes" and (
-        nodes and not started or (ip_is_local(hostname) or hostname == "localhost")
-    ):
+    # 5. Register sender node and mark it active
+    sender_node = request.headers.get("Sender-Node", "").strip()
+    if sender_node:
         try:
-            if not started:
-                node_url = nodes[0]
-                j = await NodesManager.request(f"{node_url}/get_nodes")
-                nodes.extend(j["result"])
-                NodesManager.sync()
+            NodesManager.add_node(sender_node)
+            NodesManager.update_last_message(sender_node)
+        except Exception as e:
+            ic(f"[middleware] failed to register Sender-Node '{sender_node}': {e}")
 
-                if not (ip_is_local(hostname) or hostname == "localhost"):
-                    started = True
-                    self_url = str(request.base_url).strip("/")
-                    try:
-                        nodes.remove(self_url)
-                    except ValueError:
-                        pass
-                    try:
-                        nodes.remove(self_url.replace("http://", "https://"))
-                    except ValueError:
-                        pass
+    # 6. Discover self_url from first request (local or external — doesn't matter)
+    #    request.base_url always reflects THIS node's own host:port
+    if not self_url and normalized_path != "/get_nodes":
+        self_url = NodesManager.canonicalize_url(str(request.base_url))
+        NodesManager.add_node(self_url)
+        NodesManager.update_last_message(self_url)
+        ic(f"[middleware] self_url discovered: {self_url}")
 
-                    NodesManager.sync()
+    # 7. Trigger bootstrap once self_url is known
+    if self_url and node_state in (NodeState.PENDING, NodeState.FAILED):
+        asyncio.create_task(_bootstrap())
 
-                    # Propagate this node to others only during initialization
-                    try:
-                        await propagate("add_node", {"url": self_url})
-                        cousin_nodes = await NodeInterface(node_url).get_nodes()
-                        await propagate(
-                            "add_node", {"url": self_url}, nodes=cousin_nodes
-                        )
-                    except:
-                        pass
-        except:
-            pass
+    # 8. Propagate pending transactions
+    try:
+        propagate_txs = await db.get_need_propagate_transactions()
+    except Exception as e:
+        ic(f"[middleware] get_need_propagate_transactions failed: {e}")
+        propagate_txs = []
 
-    propagate_txs = await db.get_need_propagate_transactions()
+    # 9. Handle request
     try:
         response = await call_next(request)
         response.headers["Access-Control-Allow-Origin"] = "*"
@@ -436,6 +507,7 @@ async def middleware(request: Request, call_next):
             )
         return response
     except Exception as e:
+        ic(f"[middleware] unhandled error on {normalized_path}: {type(e).__name__}: {e}")
         raise
 
 async def get_ip_address_from_header(request: Request):
@@ -491,7 +563,7 @@ async def verify_and_push_tx(
             # Broadcast new transaction to WebSocket subscribers
             tx_data = {
                 "tx_hash": tx_hash,
-                "from": tx.inputs[0].address if tx.inputs else None,
+                "from": await tx.inputs[0].get_public_key() if tx.inputs else None,
                 "to": [output.address for output in tx.outputs],
                 "amount": sum(output.amount for output in tx.outputs),
                 "fees": tx.fees,
