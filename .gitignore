@@ -14,5 +14,6 @@ upow/upow_wallet/upow_wallet.json
 upow/node/nodes.json
 logs/
 emission_details.json
+emission_details1.json
 ip_config.json
 nodes.json.lock
