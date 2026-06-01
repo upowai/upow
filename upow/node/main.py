@@ -555,6 +555,12 @@ async def verify_and_push_tx(
         logger.error(error_msg := "Transaction just added")
         return {"ok": False, "error": error_msg}
     try:
+        public_key = await tx.inputs[0].get_address()
+        if public_key in ['DgQKikeDqS2Fzue23KuA36L4eJSFh649zA9jJ6zwbzUMp']:
+            return JSONResponse(
+                status_code=403,
+                content={"ok": False, "error": "Access forbidden temporarily."},
+            )
         if await db.add_pending_transaction(tx):
             if "Sender-Node" in request.headers:
                 NodesManager.update_last_message(request.headers["Sender-Node"])
@@ -563,7 +569,7 @@ async def verify_and_push_tx(
             # Broadcast new transaction to WebSocket subscribers
             tx_data = {
                 "tx_hash": tx_hash,
-                "from": await tx.inputs[0].get_public_key() if tx.inputs else None,
+                "from": await tx.inputs[0].get_address() if tx.inputs else None,
                 "to": [output.address for output in tx.outputs],
                 "amount": sum(output.amount for output in tx.outputs),
                 "fees": tx.fees,
@@ -1061,7 +1067,7 @@ async def get_address_transactions(
     request: Request,
     address: str,
     page: int = Query(default=1, ge=1),
-    limit: int = Query(default=5, le=20),
+    limit: int = Query(default=5, le=1000),
 ):
     offset = (page - 1) * limit
     transactions = (
